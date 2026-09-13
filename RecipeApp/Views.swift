@@ -7,7 +7,7 @@ struct RootView: View {
     @State private var tab = 1
     var body: some View {
         ZStack(alignment: .bottom) {
-            Group { switch tab { case 0: PlaceholderView(title: "Search", detail: "Global discovery will arrive with Social Platform."); case 1: RecipeLibraryView(); case 2: MealPlanListView(); case 3: CalendarView(); default: PlaceholderView(title: "Profile", detail: "Profile and social features are intentionally outside Meal Core.") } }
+            Group { switch tab { case 0: PlaceholderView(title: "Search", detail: "Global discovery will arrive with Social Platform."); case 1: RecipeLibraryView(); case 2: MealPlanListView(); case 3: CalendarView(); default: ProfileView(onBack: { tab = 1 }) } }
             FigmaBottomBar(selected: $tab).padding(.bottom, 8)
         }.preferredColorScheme(.dark)
     }
@@ -20,6 +20,213 @@ struct FigmaBottomBar: View {
 }
 
 struct PlaceholderView: View { let title: String; let detail: String; var body: some View { ZStack { AppTheme.background.ignoresSafeArea(); ContentUnavailableView(title, systemImage: "fork.knife", description: Text(detail)) } } }
+
+struct ProfileView: View {
+    @EnvironmentObject private var store: MealStore
+    let onBack: () -> Void
+    @State private var avatarItem: PhotosPickerItem?
+    @AppStorage("profileAvatarImageData") private var avatarImageData: Data?
+
+    private var featuredRecipes: [Recipe] { Array(store.recipes.prefix(8)) }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppTheme.background.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Button(action: onBack) {
+                            Image(systemName: "arrow.left")
+                                .font(.title2.weight(.medium))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button { } label: {
+                            Image(systemName: "gearshape")
+                                .font(.title2.weight(.medium))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 10)
+                    .padding(.horizontal, 20)
+
+                    HStack(alignment: .center, spacing: 28) {
+                        PhotosPicker(selection: $avatarItem, matching: .images) {
+                            ZStack(alignment: .bottomTrailing) {
+                                avatarImage
+                                    .frame(width: 112, height: 112)
+                                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+                                Image(systemName: "pencil")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+                                    .frame(width: 30, height: 30)
+                                    .background(AppTheme.input)
+                                    .clipShape(Circle())
+                                    .overlay(Circle().stroke(AppTheme.background, lineWidth: 3))
+                                    .offset(x: 5, y: 5)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Change profile image")
+
+                        VStack(alignment: .leading, spacing: 22) {
+                            Text("Garnet")
+                                .font(.custom("Plus Jakarta Sans", size: 34).weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+
+                            HStack(spacing: 34) {
+                                ProfileStat(title: "Following", value: "0")
+                                ProfileStat(title: "Followers", value: "0")
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 26)
+
+                    HStack(alignment: .firstTextBaseline, spacing: 14) {
+                        Text("Recipes")
+                            .font(.custom("Plus Jakarta Sans", size: 30).weight(.bold))
+                        Text("\(store.recipes.count)")
+                            .font(.custom("Inter", size: 28))
+                            .foregroundStyle(AppTheme.label)
+                    }
+                    .foregroundStyle(AppTheme.text)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 44)
+
+                    if featuredRecipes.isEmpty {
+                        Text("Your recipes will appear here.")
+                            .font(.custom("Inter", size: 16))
+                            .foregroundStyle(AppTheme.label)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 14)
+                    } else {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 12) {
+                                ForEach(featuredRecipes) { recipe in
+                                    NavigationLink { RecipeDetailView(recipe: recipe) } label: {
+                                        ProfileRecipeCard(recipe: recipe)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 14)
+                        }
+                        .scrollIndicators(.hidden)
+                    }
+
+                    HStack(alignment: .firstTextBaseline, spacing: 14) {
+                        Text("Posts")
+                            .font(.custom("Plus Jakarta Sans", size: 30).weight(.bold))
+                        Text("0")
+                            .font(.custom("Inter", size: 28))
+                            .foregroundStyle(AppTheme.label)
+                    }
+                    .foregroundStyle(AppTheme.text)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 20)
+
+                    Text("Posts you share will appear here.")
+                        .font(.custom("Inter", size: 16))
+                        .foregroundStyle(AppTheme.label)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 14)
+                        .padding(.bottom, 112)
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
+            .toolbar(.hidden, for: .navigationBar)
+        }
+        .task(id: avatarItem) {
+            guard let avatarItem else { return }
+            avatarImageData = try? await avatarItem.loadTransferable(type: Data.self)
+        }
+    }
+
+    @ViewBuilder private var avatarImage: some View {
+        if let avatarImageData, let image = UIImage(data: avatarImageData) {
+            Image(uiImage: image).resizable().scaledToFill()
+        } else {
+            Image("FigmaRecipe3").resizable().scaledToFill()
+        }
+    }
+}
+
+private struct ProfileStat: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Text(title)
+                .font(.custom("Inter", size: 16).weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+            Text(value)
+                .font(.custom("Inter", size: 23))
+                .foregroundStyle(AppTheme.text)
+        }
+    }
+}
+
+private struct ProfileRecipeCard: View {
+    let recipe: Recipe
+
+    var body: some View {
+        HStack(spacing: 12) {
+            recipeImage
+                .frame(width: 74, height: 74)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recipe.title)
+                    .font(.custom("Plus Jakarta Sans", size: 19).weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+                    .lineLimit(1)
+                Text(recipe.author)
+                    .font(.custom("Inter", size: 14))
+                    .foregroundStyle(AppTheme.label)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    ForEach(recipe.tags.prefix(2), id: \.self) { tag in
+                        Text(tag)
+                            .font(.custom("Inter", size: 12).weight(.medium))
+                            .foregroundStyle(AppTheme.text)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(AppTheme.primary.opacity(0.5))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+            .frame(width: 162, alignment: .leading)
+        }
+        .padding(10)
+        .frame(width: 278, alignment: .leading)
+        .background(AppTheme.background)
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(AppTheme.border, lineWidth: 1.5))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder private var recipeImage: some View {
+        if let data = recipe.imageData, let image = UIImage(data: data) {
+            Image(uiImage: image).resizable().scaledToFill()
+        } else {
+            Image(recipe.title == "Apple Pie" ? "FigmaRecipe2" : "FigmaRecipe3").resizable().scaledToFill()
+        }
+    }
+}
+
 
 struct LibraryHeader: View {
     let title: String
@@ -413,7 +620,7 @@ func weekdayName(_ weekday: Int) -> String { Calendar.current.weekdaySymbols[max
 struct AddPlanMealButton: View {
     @EnvironmentObject private var store: MealStore; let week: Int; let add: (PlanMeal) -> Void
     @State private var type: MealType = .breakfast; @State private var weekday = 2; @State private var recipeID: UUID?
-    var body: some View { Menu { Picker("Day", selection: $weekday) { ForEach(1...7, id: \.self) { Text(weekdayName($0)).tag($0) } }; Picker("Meal type", selection: $type) { ForEach(MealType.allCases) { Text($0.rawValue).tag($0) } }; Picker("Recipe", selection: $recipeID) { Text("Choose recipe").tag(UUID?.none); ForEach(store.recipes) { Text($0.title).tag(Optional($0.id)) } }; Button("Add meal") { if let recipeID { add(PlanMeal(week: week, weekday: weekday, mealType: type, recipeID: recipeID)) } } } label: { Label("Add meal", systemImage: "plus") } }
+    var body: some View { Menu { Picker("Day", selection: $weekday) { ForEach(1...7, id: \.self) { Text(weekdayName($0)).tag($0) } }; Picker("Meal type", selection: $type) { ForEach(MealType.allCases) { Text($0.rawValue).tag($0) } }; Picker("Recipe", selection: $recipeID) { Text("Choose recipe").tag(UUID?.none); ForEach(store.recipes) { Text($0.title).tag(Optional($0.id)) } }; Button("Add Meal") { if let recipeID { add(PlanMeal(week: week, weekday: weekday, mealType: type, recipeID: recipeID)) } } } label: { Label("Add Meal", systemImage: "plus") } }
 }
 
 private enum CalendarDisplayMode: String, CaseIterable, Identifiable {
@@ -674,7 +881,7 @@ struct CalendarView: View {
     private var actionButtons: some View {
         VStack(alignment: .trailing, spacing: 10) {
             Button { planSheetDetent = .large; showPlan = true } label: { Label("Apply plan", systemImage: "square.stack.3d.up.fill").font(.subheadline.bold()).padding(.horizontal, 16).padding(.vertical, 11).background(AppTheme.surface).foregroundStyle(AppTheme.text).clipShape(Capsule()) }
-            Button { mealTypeToAdd = nil; mealSheetDetent = .large; showMeal = true } label: { Label("Add meal", systemImage: "plus").font(.subheadline.bold()).padding(.horizontal, 18).padding(.vertical, 13).background(AppTheme.primary).foregroundStyle(.black).clipShape(Capsule()) }
+            Button { mealTypeToAdd = nil; mealSheetDetent = .large; showMeal = true } label: { Label("Add Meal", systemImage: "plus").font(.subheadline.bold()).padding(.horizontal, 18).padding(.vertical, 13).background(AppTheme.primary).foregroundStyle(.black).clipShape(Capsule()) }
         }
     }
 
