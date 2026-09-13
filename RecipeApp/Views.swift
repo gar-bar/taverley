@@ -21,6 +21,171 @@ struct FigmaBottomBar: View {
 
 struct PlaceholderView: View { let title: String; let detail: String; var body: some View { ZStack { AppTheme.background.ignoresSafeArea(); ContentUnavailableView(title, systemImage: "fork.knife", description: Text(detail)) } } }
 
+struct AuthenticationGate: View {
+    @EnvironmentObject private var authentication: AuthenticationStore
+    @EnvironmentObject private var store: MealStore
+
+    var body: some View {
+        Group {
+            if authentication.isRestoring {
+                ZStack {
+                    AppTheme.background.ignoresSafeArea()
+                    ProgressView().tint(AppTheme.primary)
+                }
+            } else if authentication.isSkippingForNow {
+                RootView()
+            } else if let session = authentication.session, let dataClient = authentication.dataClient {
+                RootView()
+                    .task(id: session.user.id) {
+                        await store.activateAccount(session, client: dataClient)
+                    }
+            } else {
+                EmailCodeSignInView()
+                    .onAppear { store.deactivateAccount() }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .onOpenURL { url in
+            guard url.scheme == "taverley", url.host == "auth" else { return }
+            Task { try? await authentication.completeMagicLink(url) }
+        }
+    }
+}
+
+struct EmailCodeSignInView: View {
+    @EnvironmentObject private var authentication: AuthenticationStore
+    @State private var email = ""
+    @State private var magicLinkWasSent = false
+    @State private var isSubmitting = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        ZStack {
+            AppTheme.background.ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Spacer(minLength: 100)
+
+                    Image(systemName: "fork.knife.circle.fill")
+                        .font(.system(size: 52))
+                        .foregroundStyle(AppTheme.primary)
+
+                    Text("Welcome to Taverley")
+                        .font(.custom("Plus Jakarta Sans", size: 31).weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+                        .padding(.top, 24)
+
+                    Text("Sign in to keep your recipes and meal plans private, safe, and available on every device.")
+                        .font(.custom("Inter", size: 16))
+                        .foregroundStyle(AppTheme.label)
+                        .lineSpacing(3)
+                        .padding(.top, 10)
+
+                    if magicLinkWasSent {
+                        Text("We sent a sign-in link to \(email). Open it on this device to return to Taverley.")
+                            .font(.custom("Inter", size: 15).weight(.medium))
+                            .foregroundStyle(AppTheme.text)
+                            .padding(.top, 30)
+
+                        Button(action: sendMagicLink) {
+                            buttonLabel("Resend magic link")
+                        }
+                        .disabled(isSubmitting)
+                        .padding(.top, 14)
+
+                        Button("Use a different email") {
+                            magicLinkWasSent = false
+                            errorMessage = nil
+                        }
+                        .font(.custom("Inter", size: 15).weight(.medium))
+                        .foregroundStyle(AppTheme.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 18)
+                    } else {
+                        Text("Email address")
+                            .font(.custom("Inter", size: 15).weight(.medium))
+                            .foregroundStyle(AppTheme.text)
+                            .padding(.top, 30)
+
+                        TextField("you@example.com", text: $email)
+                            .figmaInput()
+                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .textContentType(.emailAddress)
+                            .padding(.top, 8)
+
+                        Button(action: sendMagicLink) {
+                            buttonLabel("Email me a sign-in link")
+                        }
+                        .disabled(!isValidEmail || isSubmitting)
+                        .padding(.top, 14)
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.custom("Inter", size: 14))
+                            .foregroundStyle(.red)
+                            .padding(.top, 16)
+                    }
+
+                    Button("Skip for now") {
+                        authentication.isSkippingForNow = true
+                    }
+                    .font(.custom("Inter", size: 16).weight(.semibold))
+                    .foregroundStyle(AppTheme.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 22)
+
+                    Text("Apple sign-in will be added once the Apple developer configuration is ready.")
+                        .font(.custom("Inter", size: 13))
+                        .foregroundStyle(AppTheme.label)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 36)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 30)
+            }
+        }
+    }
+
+    private var isValidEmail: Bool {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.contains("@") && trimmed.contains(".")
+    }
+
+    private func buttonLabel(_ title: String) -> some View {
+        HStack(spacing: 10) {
+            if isSubmitting { ProgressView().tint(.black) }
+            Text(title)
+        }
+        .font(.custom("Inter", size: 16).weight(.bold))
+        .foregroundStyle(.black)
+        .frame(maxWidth: .infinity)
+        .frame(height: 48)
+        .background(AppTheme.primary)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .opacity(isSubmitting ? 0.72 : 1)
+    }
+
+    private func sendMagicLink() {
+        Task {
+            isSubmitting = true
+            errorMessage = nil
+            do {
+                email = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                try await authentication.sendMagicLink(to: email)
+                magicLinkWasSent = true
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isSubmitting = false
+        }
+    }
+
+}
+
 struct ProfileView: View {
     @EnvironmentObject private var store: MealStore
     let onBack: () -> Void

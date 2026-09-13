@@ -3,8 +3,13 @@ import SwiftUI
 @main
 struct RecipeApp: App {
     @StateObject private var store = MealStore()
+    @StateObject private var authentication = AuthenticationStore()
 
     var body: some Scene {
-        WindowGroup { RootView().environmentObject(store) }
+        WindowGroup {
+            AuthenticationGate()
+                .environmentObject(store)
+                .environmentObject(authentication)
+        }
     }
 }

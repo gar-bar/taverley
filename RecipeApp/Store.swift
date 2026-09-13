@@ -1,8 +1,12 @@
 import Foundation
 import Combine
 
+@MainActor
 final class MealStore: ObservableObject {
-    private let key = "meal-core-state-v1"
+    private var storageKey = "meal-core-state-v1"
+    private var syncClient: SupabaseDataClient?
+    private var syncSession: AuthSession?
+    private var isLoadingRemoteState = false
     @Published var recipes: [Recipe] = [] { didSet { persist() } }
     @Published var plans: [MealPlan] = [] { didSet { persist() } }
     @Published var calendarMeals: [CalendarMeal] = [] { didSet { persist() } }
@@ -28,10 +32,50 @@ final class MealStore: ObservableObject {
         }
     }
     func meals(on date: Date) -> [CalendarMeal] { calendarMeals.filter { Calendar.current.isDate($0.date, inSameDayAs: date) }.sorted { $0.mealType.sortOrder < $1.mealType.sortOrder } }
-    private func persist() { let state = Persisted(recipes: recipes, plans: plans, calendarMeals: calendarMeals); if let data = try? JSONEncoder().encode(state) { UserDefaults.standard.set(data, forKey: key) } }
-    private func load() { guard let data = UserDefaults.standard.data(forKey: key), let state = try? JSONDecoder().decode(Persisted.self, from: data) else { recipes = SeedData.recipes; plans = [SeedData.plan(recipes: recipes)]; return }; recipes = state.recipes; plans = state.plans; calendarMeals = state.calendarMeals }
-    private struct Persisted: Codable { var recipes: [Recipe]; var plans: [MealPlan]; var calendarMeals: [CalendarMeal] }
+    func activateAccount(_ session: AuthSession, client: SupabaseDataClient) async {
+        guard syncSession?.user.id != session.user.id else { return }
+        syncClient = client
+        syncSession = session
+        storageKey = "meal-core-state-v2-\(session.user.id.uuidString)"
+        isLoadingRemoteState = true
+        defer { isLoadingRemoteState = false }
+        loadAccountCache()
+        do {
+            let state = try await client.loadState(for: session.user.id, accessToken: session.accessToken)
+            recipes = state.recipes
+            plans = state.plans
+            calendarMeals = state.calendarMeals
+        } catch {
+            // The per-account cache remains available offline and will retry on the next edit.
+        }
+    }
+
+    func deactivateAccount() {
+        syncClient = nil
+        syncSession = nil
+        storageKey = "meal-core-state-v1"
+        load()
+    }
+
+    private func persist() {
+        let state = AccountState(recipes: recipes, plans: plans, calendarMeals: calendarMeals)
+        if let data = try? JSONEncoder().encode(state) { UserDefaults.standard.set(data, forKey: storageKey) }
+        guard !isLoadingRemoteState, let syncClient, let syncSession else { return }
+        Task { try? await syncClient.save(state, for: syncSession.user.id, accessToken: syncSession.accessToken) }
+    }
+
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: storageKey), let state = try? JSONDecoder().decode(AccountState.self, from: data) else { recipes = SeedData.recipes; plans = [SeedData.plan(recipes: recipes)]; calendarMeals = []; return }
+        recipes = state.recipes; plans = state.plans; calendarMeals = state.calendarMeals
+    }
+
+    private func loadAccountCache() {
+        guard let data = UserDefaults.standard.data(forKey: storageKey), let state = try? JSONDecoder().decode(AccountState.self, from: data) else { recipes = []; plans = []; calendarMeals = []; return }
+        recipes = state.recipes; plans = state.plans; calendarMeals = state.calendarMeals
+    }
 }
+
+struct AccountState: Codable { var recipes: [Recipe]; var plans: [MealPlan]; var calendarMeals: [CalendarMeal] }
 
 enum SeedData {
     static let recipes = [Recipe(title: "Apple Pie", summary: "A warm, flaky family dessert.", author: "Elisa", servings: 6, tags: ["Dessert", "Baking"], ingredients: [Ingredient(name: "all-purpose flour", quantity: 1.5, unit: "cups"), Ingredient(name: "apples", quantity: 5, unit: ""), Ingredient(name: "butter", quantity: 3, unit: "tbsp")], steps: [RecipeStep(text: "Prepare the crust and line a pie dish."), RecipeStep(text: "Fill with seasoned apples and bake until golden.")], nutrition: [NutritionFact(name: "Calories", amount: 320, unit: "kcal")]), Recipe(title: "Garden Toast", summary: "Fast, bright and filling.", author: "Elisa", servings: 2, tags: ["Breakfast", "Vegetarian"], ingredients: [Ingredient(name: "sourdough", quantity: 2, unit: "slices"), Ingredient(name: "avocado", quantity: 1, unit: "")], steps: [RecipeStep(text: "Toast bread and top with avocado.")], nutrition: [NutritionFact(name: "Calories", amount: 280, unit: "kcal")])]
