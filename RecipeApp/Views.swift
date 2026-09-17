@@ -4,10 +4,10 @@ import UIKit
 import Foundation
 
 struct RootView: View {
-    @State private var tab = 1
+    @State private var tab = 0
     var body: some View {
         ZStack(alignment: .bottom) {
-            Group { switch tab { case 0: PlaceholderView(title: "Search", detail: "Global discovery will arrive with Social Platform."); case 1: RecipeLibraryView(); case 2: MealPlanListView(); case 3: CalendarView(); default: ProfileView(onBack: { tab = 1 }) } }
+            Group { switch tab { case 0: FeedView(); case 1: RecipeLibraryView(); case 2: MealPlanListView(); case 3: CalendarView(); default: ProfileView(onBack: { tab = 1 }) } }
             FigmaBottomBar(selected: $tab).padding(.bottom, 8)
         }.preferredColorScheme(.dark)
     }
@@ -16,7 +16,7 @@ struct RootView: View {
 struct FigmaBottomBar: View {
     @Binding var selected: Int
     private let assetNames = ["", "FigmaNavDocument", "FigmaNavFolder", "FigmaNavCalendar", "FigmaNavProfile"]
-    var body: some View { HStack(spacing: 20) { ForEach(0..<5, id: \.self) { index in Button { selected = index } label: { ZStack { if selected == index { RoundedRectangle(cornerRadius: 12).fill(AppTheme.input).frame(width: 45, height: 45) }; if index == 0 { Image(systemName: "magnifyingglass").font(.title3).foregroundStyle(AppTheme.text) } else { Image(assetNames[index]).resizable().renderingMode(.original).scaledToFit().frame(width: 25, height: 25) } }.frame(width: 50, height: 50) }.buttonStyle(.plain).accessibilityLabel(["Search", "My Recipes", "My Meal Plans", "Meal Planning", "My Profile"][index]) } }.padding(.horizontal, 21).frame(height: 50).background(AppTheme.surface.opacity(0.96)).overlay(RoundedRectangle(cornerRadius: 14).stroke(AppTheme.input, lineWidth: 1)).clipShape(RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.3), radius: 12, y: 5) }
+    var body: some View { HStack(spacing: 20) { ForEach(0..<5, id: \.self) { index in Button { selected = index } label: { ZStack { if selected == index { RoundedRectangle(cornerRadius: 12).fill(AppTheme.input).frame(width: 45, height: 45) }; if index == 0 { Image(systemName: "magnifyingglass").font(.title3).foregroundStyle(AppTheme.text) } else { Image(assetNames[index]).resizable().renderingMode(.original).scaledToFit().frame(width: 25, height: 25) } }.frame(width: 50, height: 50) }.buttonStyle(.plain).accessibilityLabel(["My Feed", "My Recipes", "My Meal Plans", "Meal Planning", "My Profile"][index]) } }.padding(.horizontal, 21).frame(height: 50).background(AppTheme.surface.opacity(0.96)).overlay(RoundedRectangle(cornerRadius: 14).stroke(AppTheme.input, lineWidth: 1)).clipShape(RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.3), radius: 12, y: 5) }
 }
 
 struct PlaceholderView: View { let title: String; let detail: String; var body: some View { ZStack { AppTheme.background.ignoresSafeArea(); ContentUnavailableView(title, systemImage: "fork.knife", description: Text(detail)) } } }
@@ -24,6 +24,7 @@ struct PlaceholderView: View { let title: String; let detail: String; var body: 
 struct AuthenticationGate: View {
     @EnvironmentObject private var authentication: AuthenticationStore
     @EnvironmentObject private var store: MealStore
+    @EnvironmentObject private var feedStore: FeedStore
 
     var body: some View {
         Group {
@@ -34,28 +35,29 @@ struct AuthenticationGate: View {
                 }
             } else if authentication.isSkippingForNow {
                 RootView()
+                    .onAppear { feedStore.deactivateAccount() }
             } else if let session = authentication.session, let dataClient = authentication.dataClient {
                 RootView()
                     .task(id: session.user.id) {
                         await store.activateAccount(session, client: dataClient)
+                        await feedStore.activateAccount(session, client: dataClient)
                     }
             } else {
                 EmailCodeSignInView()
-                    .onAppear { store.deactivateAccount() }
+                    .onAppear {
+                        store.deactivateAccount()
+                        feedStore.deactivateAccount()
+                    }
             }
         }
         .preferredColorScheme(.dark)
-        .onOpenURL { url in
-            guard url.scheme == "taverley", url.host == "auth" else { return }
-            Task { try? await authentication.completeMagicLink(url) }
-        }
     }
 }
 
 struct EmailCodeSignInView: View {
     @EnvironmentObject private var authentication: AuthenticationStore
     @State private var email = ""
-    @State private var magicLinkWasSent = false
+    @State private var password = ""
     @State private var isSubmitting = false
     @State private var errorMessage: String?
 
@@ -82,45 +84,33 @@ struct EmailCodeSignInView: View {
                         .lineSpacing(3)
                         .padding(.top, 10)
 
-                    if magicLinkWasSent {
-                        Text("We sent a sign-in link to \(email). Open it on this device to return to Taverley.")
-                            .font(.custom("Inter", size: 15).weight(.medium))
-                            .foregroundStyle(AppTheme.text)
-                            .padding(.top, 30)
-
-                        Button(action: sendMagicLink) {
-                            buttonLabel("Resend magic link")
-                        }
-                        .disabled(isSubmitting)
-                        .padding(.top, 14)
-
-                        Button("Use a different email") {
-                            magicLinkWasSent = false
-                            errorMessage = nil
-                        }
+                    Text("Email address")
                         .font(.custom("Inter", size: 15).weight(.medium))
-                        .foregroundStyle(AppTheme.primary)
-                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(AppTheme.text)
+                        .padding(.top, 30)
+
+                    TextField("you@example.com", text: $email)
+                        .figmaInput()
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .textContentType(.emailAddress)
+                        .padding(.top, 8)
+
+                    Text("Password")
+                        .font(.custom("Inter", size: 15).weight(.medium))
+                        .foregroundStyle(AppTheme.text)
                         .padding(.top, 18)
-                    } else {
-                        Text("Email address")
-                            .font(.custom("Inter", size: 15).weight(.medium))
-                            .foregroundStyle(AppTheme.text)
-                            .padding(.top, 30)
 
-                        TextField("you@example.com", text: $email)
-                            .figmaInput()
-                            .keyboardType(.emailAddress)
-                            .textInputAutocapitalization(.never)
-                            .textContentType(.emailAddress)
-                            .padding(.top, 8)
+                    SecureField("Password", text: $password)
+                        .figmaInput()
+                        .textContentType(.password)
+                        .padding(.top, 8)
 
-                        Button(action: sendMagicLink) {
-                            buttonLabel("Email me a sign-in link")
-                        }
-                        .disabled(!isValidEmail || isSubmitting)
-                        .padding(.top, 14)
+                    Button(action: signIn) {
+                        buttonLabel("Sign in")
                     }
+                    .disabled(!isValidEmail || password.isEmpty || isSubmitting)
+                    .padding(.top, 14)
 
                     if let errorMessage {
                         Text(errorMessage)
@@ -137,7 +127,7 @@ struct EmailCodeSignInView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 22)
 
-                    Text("Apple sign-in will be added once the Apple developer configuration is ready.")
+                    Text("Test accounts can be created manually in Supabase. Password reset and Apple sign-in will be added later.")
                         .font(.custom("Inter", size: 13))
                         .foregroundStyle(AppTheme.label)
                         .multilineTextAlignment(.center)
@@ -169,14 +159,13 @@ struct EmailCodeSignInView: View {
         .opacity(isSubmitting ? 0.72 : 1)
     }
 
-    private func sendMagicLink() {
+    private func signIn() {
         Task {
             isSubmitting = true
             errorMessage = nil
             do {
                 email = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                try await authentication.sendMagicLink(to: email)
-                magicLinkWasSent = true
+                try await authentication.signIn(email: email, password: password)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -188,9 +177,12 @@ struct EmailCodeSignInView: View {
 
 struct ProfileView: View {
     @EnvironmentObject private var store: MealStore
+    @EnvironmentObject private var feedStore: FeedStore
+    @EnvironmentObject private var authentication: AuthenticationStore
     let onBack: () -> Void
     @State private var avatarItem: PhotosPickerItem?
     @AppStorage("profileAvatarImageData") private var avatarImageData: Data?
+    @State private var showAccountOptions = false
 
     private var featuredRecipes: [Recipe] { Array(store.recipes.prefix(8)) }
 
@@ -212,7 +204,7 @@ struct ProfileView: View {
 
                         Spacer()
 
-                        Button { } label: {
+                        Button { showAccountOptions = true } label: {
                             Image(systemName: "gearshape")
                                 .font(.title2.weight(.medium))
                                 .foregroundStyle(AppTheme.text)
@@ -243,10 +235,17 @@ struct ProfileView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Change profile image")
 
-                        VStack(alignment: .leading, spacing: 22) {
-                            Text("Garnet")
-                                .font(.custom("Plus Jakarta Sans", size: 34).weight(.bold))
-                                .foregroundStyle(AppTheme.text)
+                        VStack(alignment: .leading, spacing: 18) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(feedStore.currentProfile?.displayName ?? "Garnet")
+                                    .font(.custom("Plus Jakarta Sans", size: 34).weight(.bold))
+                                    .foregroundStyle(AppTheme.text)
+                                if let username = feedStore.currentProfile?.username {
+                                    Text("@\(username)")
+                                        .font(.custom("Inter", size: 14))
+                                        .foregroundStyle(AppTheme.label)
+                                }
+                            }
 
                             HStack(spacing: 34) {
                                 ProfileStat(title: "Following", value: "0")
@@ -312,6 +311,13 @@ struct ProfileView: View {
                 .scrollIndicators(.hidden)
             }
             .toolbar(.hidden, for: .navigationBar)
+        }
+        .confirmationDialog("Account", isPresented: $showAccountOptions, titleVisibility: .visible) {
+            Button("Sign out", role: .destructive) {
+                authentication.signOut()
+            }
+        } message: {
+            Text("You can sign in with a different test account after signing out.")
         }
         .task(id: avatarItem) {
             guard let avatarItem else { return }

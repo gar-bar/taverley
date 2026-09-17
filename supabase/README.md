@@ -1,8 +1,11 @@
 # Supabase setup
 
 1. In the Supabase Dashboard, open **SQL Editor** and run [the initial migration](migrations/20260913112000_account_data.sql). It creates private, user-owned profile, recipe, meal-plan, and calendar tables protected by Row Level Security.
-2. In **Authentication → URL Configuration → Redirect URLs**, add `taverley://auth/callback`. This returns a successful magic-link sign-in to the app.
-3. For development, add your own email address as an authorized team address. The built-in sender can deliver its stock magic-link email to team members only, with a two-email-per-hour limit.
-4. Before external testing or launch, configure a custom SMTP provider and sender domain. At that point, [magic-link.html](templates/magic-link.html) is available if you decide to switch back to a six-digit-code email flow.
+2. For development, create test accounts manually in **Authentication → Users → Add user → Create user**. Set an email and password, and auto-confirm the email. This sends no email and works with the app's password sign-in screen.
+3. Before external testing or launch, configure a custom SMTP provider and sender domain. This is needed for self-service account creation, password reset, and any future magic-link or six-digit-code flow. [magic-link.html](templates/magic-link.html) is available if you later switch back to email codes.
+
+## Shared feed setup
+
+After the initial migration, run [the shared feed migration](migrations/20260917160000_shared_feed.sql). It adds unique usernames, authenticated shared posts, live links to published recipes, and the private `post-photos` Storage bucket. Linked recipes can be read by signed-in feed users; unlinked recipes remain private.
 
 The app uses the public Supabase URL and publishable key in `RecipeApp/Info.plist`. The service-role key must never be placed in the app or committed to this repository.

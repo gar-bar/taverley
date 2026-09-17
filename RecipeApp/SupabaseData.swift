@@ -1,8 +1,8 @@
 import Foundation
 
 actor SupabaseDataClient {
-    private let configuration: SupabaseConfiguration
-    private let session: URLSession
+    let configuration: SupabaseConfiguration
+    let session: URLSession
 
     init(configuration: SupabaseConfiguration, session: URLSession = .shared) {
         self.configuration = configuration
@@ -17,7 +17,9 @@ actor SupabaseDataClient {
     }
 
     func save(_ state: AccountState, for userID: UUID, accessToken: String) async throws {
-        async let recipeSave: Void = replace(state.recipes, table: "recipes", userID: userID, accessToken: accessToken)
+        // Feed posts can reference recipes. Upserting preserves those links while
+        // still propagating the owner's live recipe edits.
+        async let recipeSave: Void = upsert(state.recipes, table: "recipes", userID: userID, accessToken: accessToken)
         async let planSave: Void = replace(state.plans, table: "meal_plans", userID: userID, accessToken: accessToken)
         async let calendarSave: Void = replace(state.calendarMeals, table: "calendar_meals", userID: userID, accessToken: accessToken)
         _ = try await (recipeSave, planSave, calendarSave)
@@ -66,7 +68,7 @@ actor SupabaseDataClient {
         try await upsert(values, table: table, userID: userID, accessToken: accessToken)
     }
 
-    private func validate(_ response: URLResponse, data: Data) throws {
+    func validate(_ response: URLResponse, data: Data) throws {
         guard let response = response as? HTTPURLResponse else { throw SyncError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
             let message = (try? JSONDecoder().decode(SupabaseError.self, from: data).message) ?? "Unable to sync your changes."

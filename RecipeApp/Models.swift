@@ -34,3 +34,69 @@ struct MealPlan: Identifiable, Codable, Hashable {
 struct CalendarMeal: Identifiable, Codable, Hashable {
     var id = UUID(); var date: Date; var mealType: MealType; var recipeID: UUID; var assignmentID: UUID?
 }
+
+struct UserProfile: Identifiable, Codable, Hashable {
+    var id: UUID
+    var displayName: String
+    var username: String
+}
+
+struct FeedPost: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var authorID: UUID
+    var title: String
+    var body: String
+    var recipeID: UUID?
+    var photoPaths: [String]
+    var createdAt = Date()
+
+    var isValidForPublishing: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && photoPaths.count <= 4
+    }
+}
+
+struct FeedItem: Identifiable {
+    var post: FeedPost
+    var author: UserProfile
+    var recipe: Recipe?
+
+    var id: UUID { post.id }
+
+    func matches(_ rawQuery: String) -> Bool {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+        let searchable = [
+            author.displayName,
+            author.username,
+            "@\(author.username)",
+            post.title,
+            post.body,
+            recipe?.title ?? "",
+            recipe?.ingredients.map(\.display).joined(separator: " ") ?? ""
+        ]
+        return searchable.contains { $0.localizedCaseInsensitiveContains(query) }
+    }
+}
+
+enum UsernamePolicy {
+    static func normalize(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+            .lowercased()
+    }
+
+    static func isValid(_ value: String) -> Bool {
+        let normalized = normalize(value)
+        guard (3...30).contains(normalized.count) else { return false }
+        return normalized.range(of: "^[a-z0-9._]+$", options: .regularExpression) != nil
+    }
+
+    static func suggestion(from email: String?) -> String {
+        let localPart = email?.split(separator: "@").first.map(String.init) ?? "cook"
+        let allowed = localPart.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" }
+        let padded = allowed.count >= 3 ? allowed : "\(allowed)cook"
+        return String(padded.prefix(30))
+    }
+}

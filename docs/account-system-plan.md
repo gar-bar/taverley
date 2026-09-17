@@ -3,40 +3,36 @@
 ## Current implementation
 
 - The app requires authentication before showing recipes and meal plans.
-- Development sign-in uses Supabase's stock email magic-link flow.
+- Development sign-in uses email and password. Test accounts are created manually in Supabase.
 - A successful session is stored securely in Keychain and refreshed when needed.
 - Recipe, meal-plan, and calendar data are designed to load and save privately per account.
 - Existing local demo data is not migrated into an account; a new account begins empty.
 - Apple sign-in is intentionally not implemented yet.
+- Signed-in accounts can complete a display name and unique username, read the shared feed, and publish posts with optional live recipe links and up to four photos.
 - The sign-in screen has a persistent **Skip for now** option for development. It uses local-only data and sends no authentication email.
 
 ## Required before the first end-to-end test
 
-1. In Supabase **Authentication → URL Configuration → Redirect URLs**, add:
-
-   ```
-   taverley://auth/callback
-   ```
-
-2. In Supabase **SQL Editor**, run [the initial migration](../supabase/migrations/20260913112000_account_data.sql).
+1. In Supabase **SQL Editor**, run [the initial migration](../supabase/migrations/20260913112000_account_data.sql).
 
    This creates the private `profiles`, `recipes`, `meal_plans`, and `calendar_meals` tables and turns on Row Level Security.
 
-3. Use an email address that belongs to the Supabase organization to test the app's magic-link sign-in.
+2. Run [the shared feed migration](../supabase/migrations/20260917160000_shared_feed.sql).
+
+   This adds shared posts, unique usernames, authenticated access to linked recipes, and the protected post-photo bucket.
+
+3. In Supabase **Authentication → Users**, create a user with an email and password, and auto-confirm the email.
 
 4. Verify the full flow:
 
-   - Request a sign-in link in the app.
-   - Open the link on the same simulator or device.
-   - Confirm the app opens signed in.
+   - Sign in with the test account in the app.
    - Create a recipe, meal plan, and calendar entry.
    - Relaunch the app and confirm the data is still present.
 
 ## Development limitations
 
-- Supabase's built-in email sender only sends to organization members.
-- It is rate-limited to two auth emails per hour.
-- It uses the default magic-link email, not a branded six-digit-code email.
+- The app has no self-service sign-up or password reset yet.
+- Test accounts must be created manually in the Supabase Dashboard.
 
 These are acceptable for personal development only.
 
@@ -46,7 +42,7 @@ These are acceptable for personal development only.
 2. Configure custom SMTP (for example, Resend) in Supabase.
 3. Set up SPF, DKIM, and DMARC DNS records for the sending domain.
 4. Change the sender to something like `Taverley <no-reply@auth.yourdomain.com>`.
-5. Decide whether to retain magic links or restore six-digit email codes. The ready-to-use code email is in [magic-link.html](../supabase/templates/magic-link.html).
+5. Add self-service registration and password reset, then decide whether to retain passwords, add magic links, or restore six-digit email codes. The ready-to-use code email is in [magic-link.html](../supabase/templates/magic-link.html).
 6. Test sign-in and account recovery with non-team email addresses.
 7. Review Supabase Auth rate limits and error logs.
 

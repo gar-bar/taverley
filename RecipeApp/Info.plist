@@ -10,7 +10,6 @@
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>SUPABASE_URL</key><string>https://tjxwoiytizapzhfonuas.supabase.co</string>
 <key>SUPABASE_PUBLISHABLE_KEY</key><string>sb_publishable_fpnrPHY7Or13ywmquY-Hzw_3JPxyf13</string>
-<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>taverley</string></array></dict></array>
 <key>UILaunchScreen</key><dict/>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
 </dict></plist>
