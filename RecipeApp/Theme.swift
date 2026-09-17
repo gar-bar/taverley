@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum AppTheme {
     static let background = Color(red: 15/255, green: 13/255, blue: 20/255)
@@ -24,6 +25,46 @@ struct Tag: View {
 struct PrimaryButton: View {
     let title: String; var icon: String? = nil; let action: () -> Void
     var body: some View { Button(action: action) { Group { if let icon { Label(title, systemImage: icon) } else { Text(title) } }.font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 13).background(AppTheme.primary).foregroundStyle(.black).clipShape(RoundedRectangle(cornerRadius: 12)) } }
+}
+
+struct RecipeSelectionCard: View {
+    let recipe: Recipe
+
+    var body: some View {
+        HStack(spacing: 10) {
+            recipeImage
+                .frame(width: 58, height: 58)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(recipe.title)
+                    .font(.custom("Plus Jakarta Sans", size: 18).weight(.semibold))
+                    .foregroundStyle(AppTheme.text)
+                    .lineLimit(1)
+                Text(recipe.author)
+                    .font(.custom("Inter", size: 12))
+                    .foregroundStyle(AppTheme.label)
+                HStack(spacing: 6) {
+                    ForEach(recipe.tags.prefix(2), id: \.self) { Tag(title: $0) }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(9)
+        .background(AppTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    @ViewBuilder
+    private var recipeImage: some View {
+        if let data = recipe.imageData, let image = UIImage(data: data) {
+            Image(uiImage: image).resizable().scaledToFill()
+        } else {
+            Image(recipe.title == "Apple Pie" ? "FigmaRecipe2" : "FigmaRecipe3")
+                .resizable()
+                .scaledToFill()
+        }
+    }
 }
 
 extension View {

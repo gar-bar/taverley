@@ -54,13 +54,41 @@ extension SupabaseDataClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("return=representation", forHTTPHeaderField: "Prefer")
-        request.httpBody = try JSONEncoder().encode([FeedPostRecord(post)])
+        // The server, rather than the device, supplies author_id and timestamps.
+        // This keeps post ownership tied to the JWT that made the request.
+        request.httpBody = try JSONEncoder().encode([FeedPostInsertRecord(post)])
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         guard let saved = try JSONDecoder().decode([FeedPostRecord].self, from: data).first?.post else {
             throw SyncError.invalidResponse
         }
         return saved
+    }
+
+    func updatePost(_ post: FeedPost, accessToken: String) async throws -> FeedPost {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/feed_posts"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "id", value: "eq.\(post.id.uuidString)")]
+        var request = authorizedRequest(url: components.url!, accessToken: accessToken)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("return=representation", forHTTPHeaderField: "Prefer")
+        request.httpBody = try JSONEncoder().encode(FeedPostUpdateRecord(post))
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        guard let saved = try JSONDecoder().decode([FeedPostRecord].self, from: data).first?.post else {
+            throw SyncError.invalidResponse
+        }
+        return saved
+    }
+
+    func deletePost(id: UUID, accessToken: String) async throws {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/feed_posts"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "id", value: "eq.\(id.uuidString)")]
+        var request = authorizedRequest(url: components.url!, accessToken: accessToken)
+        request.httpMethod = "DELETE"
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
     }
 
     func uploadPostPhoto(_ data: Data, path: String, accessToken: String) async throws {
@@ -187,6 +215,60 @@ private struct FeedPostRecord: Codable {
     }
 }
 
+private struct FeedPostInsertRecord: Encodable {
+    let id: UUID
+    let title: String
+    let body: String
+    let recipeID: UUID?
+    let photoPaths: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, body
+        case recipeID = "recipe_id"
+        case photoPaths = "photo_paths"
+    }
+
+    init(_ post: FeedPost) {
+        id = post.id
+        title = post.title
+        body = post.body
+        recipeID = post.recipeID
+        photoPaths = Array(post.photoPaths.prefix(4))
+    }
+}
+
+private struct FeedPostUpdateRecord: Encodable {
+    let title: String
+    let body: String
+    let recipeID: UUID?
+    let photoPaths: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case title, body
+        case recipeID = "recipe_id"
+        case photoPaths = "photo_paths"
+    }
+
+    init(_ post: FeedPost) {
+        title = post.title
+        body = post.body
+        recipeID = post.recipeID
+        photoPaths = Array(post.photoPaths.prefix(4))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(title, forKey: .title)
+        try container.encode(body, forKey: .body)
+        if let recipeID {
+            try container.encode(recipeID, forKey: .recipeID)
+        } else {
+            try container.encodeNil(forKey: .recipeID)
+        }
+        try container.encode(photoPaths, forKey: .photoPaths)
+    }
+}
+
 private struct PublishedRecipeRecord: Decodable { let payload: Recipe }
 
 private enum FeedDateCoding {
@@ -213,6 +295,7 @@ final class FeedStore: ObservableObject {
     private var session: AuthSession?
 
     var isAuthenticated: Bool { session != nil }
+    var currentUserID: UUID? { session?.user.id }
 
     func activateAccount(_ session: AuthSession, client: SupabaseDataClient) async {
         guard self.session?.user.id != session.user.id else { return }
@@ -275,31 +358,111 @@ final class FeedStore: ObservableObject {
             throw SyncError.service(message: "Complete your profile before publishing.")
         }
         let postID = UUID()
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
         let paths = photos.prefix(4).enumerated().map { index, _ in
             "\(session.user.id.uuidString.lowercased())/\(postID.uuidString.lowercased())/\(index).jpg"
         }
+        let draft = FeedPost(
+            id: postID,
+            authorID: session.user.id,
+            title: trimmedTitle,
+            body: trimmedBody,
+            recipeID: recipe?.id,
+            photoPaths: paths,
+            createdAt: Date()
+        )
+        guard draft.isValidForPublishing else { throw SyncError.service(message: "Add a title and post details before publishing.") }
+
         var uploaded: [String] = []
         do {
+            // A linked recipe must exist remotely before the post policy will
+            // accept its foreign key. This also syncs newly-created recipes
+            // immediately instead of relying on background account sync.
+            if let recipe {
+                try await client.saveRecipe(recipe, for: session.user.id, accessToken: session.accessToken)
+            }
             for (data, path) in zip(photos.prefix(4), paths) {
                 try await client.uploadPostPhoto(data, path: path, accessToken: session.accessToken)
                 uploaded.append(path)
             }
-            let draft = FeedPost(
-                id: postID,
-                authorID: session.user.id,
-                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-                body: body.trimmingCharacters(in: .whitespacesAndNewlines),
-                recipeID: recipe?.id,
-                photoPaths: paths,
-                createdAt: Date()
-            )
-            guard draft.isValidForPublishing else { throw SyncError.service(message: "Add a title and post details before publishing.") }
             let saved = try await client.createPost(draft, accessToken: session.accessToken)
             items.insert(FeedItem(post: saved, author: currentProfile, recipe: recipe), at: 0)
             for (path, data) in zip(paths, photos) { photoData[path] = data }
         } catch {
             for path in uploaded { try? await client.deletePostPhoto(path: path, accessToken: session.accessToken) }
             throw error
+        }
+    }
+
+    func update(
+        post: FeedPost,
+        title: String,
+        body: String,
+        recipe: Recipe?,
+        retainedPhotoPaths: [String],
+        newPhotos: [Data]
+    ) async throws {
+        guard let client, let session, post.authorID == session.user.id else {
+            throw SyncError.service(message: "Only the post author can edit this post.")
+        }
+
+        let keptPaths = Array(retainedPhotoPaths.prefix(4))
+        let availablePhotoSlots = max(0, 4 - keptPaths.count)
+        let pendingPhotos = Array(newPhotos.prefix(availablePhotoSlots))
+        let newPaths = pendingPhotos.map { _ in
+            "\(session.user.id.uuidString.lowercased())/\(post.id.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
+        }
+        let updated = FeedPost(
+            id: post.id,
+            authorID: post.authorID,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            body: body.trimmingCharacters(in: .whitespacesAndNewlines),
+            recipeID: recipe?.id,
+            photoPaths: keptPaths + newPaths,
+            createdAt: post.createdAt
+        )
+        guard updated.isValidForPublishing else {
+            throw SyncError.service(message: "Add a title and post details before saving.")
+        }
+
+        var uploaded: [String] = []
+        do {
+            if let recipe {
+                try await client.saveRecipe(recipe, for: session.user.id, accessToken: session.accessToken)
+            }
+            for (data, path) in zip(pendingPhotos, newPaths) {
+                try await client.uploadPostPhoto(data, path: path, accessToken: session.accessToken)
+                uploaded.append(path)
+            }
+
+            let saved = try await client.updatePost(updated, accessToken: session.accessToken)
+            if let index = items.firstIndex(where: { $0.post.id == post.id }) {
+                let author = items[index].author
+                items[index] = FeedItem(post: saved, author: author, recipe: recipe)
+            }
+            for (path, data) in zip(newPaths, pendingPhotos) { photoData[path] = data }
+
+            let removedPaths = Set(post.photoPaths).subtracting(keptPaths)
+            for path in removedPaths {
+                try? await client.deletePostPhoto(path: path, accessToken: session.accessToken)
+                photoData[path] = nil
+            }
+        } catch {
+            for path in uploaded { try? await client.deletePostPhoto(path: path, accessToken: session.accessToken) }
+            throw error
+        }
+    }
+
+    func delete(post: FeedPost) async throws {
+        guard let client, let session, post.authorID == session.user.id else {
+            throw SyncError.service(message: "Only the post author can delete this post.")
+        }
+        try await client.deletePost(id: post.id, accessToken: session.accessToken)
+        items.removeAll { $0.post.id == post.id }
+        for path in post.photoPaths {
+            try? await client.deletePostPhoto(path: path, accessToken: session.accessToken)
+            photoData[path] = nil
         }
     }
 

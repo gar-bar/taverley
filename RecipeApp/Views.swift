@@ -183,8 +183,13 @@ struct ProfileView: View {
     @State private var avatarItem: PhotosPickerItem?
     @AppStorage("profileAvatarImageData") private var avatarImageData: Data?
     @State private var showAccountOptions = false
+    @State private var selectedPostID: UUID?
 
     private var featuredRecipes: [Recipe] { Array(store.recipes.prefix(8)) }
+    private var authoredPosts: [FeedItem] {
+        guard let userID = feedStore.currentProfile?.id ?? feedStore.currentUserID else { return [] }
+        return feedStore.items.filter { $0.post.authorID == userID }
+    }
 
     var body: some View {
         NavigationStack {
@@ -292,7 +297,7 @@ struct ProfileView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 14) {
                         Text("Posts")
                             .font(.custom("Plus Jakarta Sans", size: 30).weight(.bold))
-                        Text("0")
+                        Text("\(authoredPosts.count)")
                             .font(.custom("Inter", size: 28))
                             .foregroundStyle(AppTheme.label)
                     }
@@ -300,17 +305,35 @@ struct ProfileView: View {
                     .padding(.horizontal, 24)
                     .padding(.top, 20)
 
-                    Text("Posts you share will appear here.")
-                        .font(.custom("Inter", size: 16))
-                        .foregroundStyle(AppTheme.label)
-                        .padding(.horizontal, 24)
-                        .padding(.top, 14)
+                    if authoredPosts.isEmpty {
+                        Text("Posts you share will appear here.")
+                            .font(.custom("Inter", size: 16))
+                            .foregroundStyle(AppTheme.label)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 14)
+                            .padding(.bottom, 112)
+                    } else {
+                        LazyVStack(spacing: 0) {
+                            ForEach(authoredPosts) { post in
+                                FeedPostCard(item: post) {
+                                    selectedPostID = post.id
+                                }
+                                Divider()
+                                    .overlay(AppTheme.border)
+                                    .padding(.horizontal, 16)
+                            }
+                        }
+                        .padding(.top, 10)
                         .padding(.bottom, 112)
+                    }
                     }
                 }
                 .scrollIndicators(.hidden)
-            }
-            .toolbar(.hidden, for: .navigationBar)
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(item: $selectedPostID) { postID in
+            PostDetailView(postID: postID)
+        }
         }
         .confirmationDialog("Account", isPresented: $showAccountOptions, titleVisibility: .visible) {
             Button("Sign out", role: .destructive) {
@@ -1161,27 +1184,14 @@ struct ScheduleMealSheet: View {
                 pendingRecipe = recipe
             }
         } label: {
-            HStack(spacing: 10) {
-                Image(recipe.title == "Apple Pie" ? "FigmaRecipe2" : "FigmaRecipe3")
-                    .resizable().scaledToFill().frame(width: 58, height: 58).clipShape(Circle())
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(recipe.title).font(.custom("Plus Jakarta Sans", size: 18).weight(.semibold)).foregroundStyle(AppTheme.text).lineLimit(1)
-                    Text(recipe.author).font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label)
-                    HStack(spacing: 6) { ForEach(recipe.tags.prefix(2), id: \.self) { Tag(title: $0) } }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(9).background(AppTheme.surface).clipShape(RoundedRectangle(cornerRadius: 14))
+            RecipeSelectionCard(recipe: recipe)
         }.buttonStyle(.plain)
     }
 
     private func mealTypeConfirmation(for recipe: Recipe) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Button { pendingRecipe = nil; type = nil } label: { Label("Back to recipes", systemImage: "chevron.left").font(.custom("Inter", size: 13).weight(.semibold)).foregroundStyle(AppTheme.label) }
-            HStack(spacing: 12) {
-                Image(recipe.title == "Apple Pie" ? "FigmaRecipe2" : "FigmaRecipe3").resizable().scaledToFill().frame(width: 58, height: 58).clipShape(Circle())
-                VStack(alignment: .leading, spacing: 3) { Text(recipe.title).font(.custom("Plus Jakarta Sans", size: 18).weight(.semibold)).foregroundStyle(AppTheme.text); Text(recipe.author).font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label) }
-            }.padding(10).background(AppTheme.surface).clipShape(RoundedRectangle(cornerRadius: 14))
+            RecipeSelectionCard(recipe: recipe)
             Text("Which meal is this for?").font(.custom("Plus Jakarta Sans", size: 20).weight(.bold)).foregroundStyle(AppTheme.text)
             ForEach(MealType.allCases) { mealType in
                 Button { type = mealType } label: {

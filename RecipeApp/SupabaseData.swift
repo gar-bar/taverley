@@ -25,6 +25,12 @@ actor SupabaseDataClient {
         _ = try await (recipeSave, planSave, calendarSave)
     }
 
+    /// Makes a recipe available to a post immediately, without waiting for the
+    /// account store's background sync task.
+    func saveRecipe(_ recipe: Recipe, for userID: UUID, accessToken: String) async throws {
+        try await upsert([recipe], table: "recipes", userID: userID, accessToken: accessToken)
+    }
+
     private func fetch<Payload: Decodable>(table: String, userID: UUID, accessToken: String) async throws -> [Payload] {
         var components = URLComponents(url: configuration.url.appending(path: "rest/v1/\(table)"), resolvingAgainstBaseURL: false)!
         components.queryItems = [

@@ -9,6 +9,7 @@ struct FeedView: View {
     @State private var activeSheet: FeedSheet?
     @State private var showSignInPrompt = false
     @State private var composeAfterProfileSetup = false
+    @State private var selectedPostID: UUID?
 
     private var filteredItems: [FeedItem] {
         feedStore.items.filter { $0.matches(query) }
@@ -40,6 +41,9 @@ struct FeedView: View {
                     .foregroundStyle(.black)
                     .accessibilityLabel("Create post")
                 }
+            }
+            .navigationDestination(item: $selectedPostID) { postID in
+                PostDetailView(postID: postID)
             }
             .sheet(item: $activeSheet, onDismiss: {
                 if composeAfterProfileSetup {
@@ -138,7 +142,9 @@ struct FeedView: View {
                     .listRowBackground(AppTheme.surface)
                 }
                 ForEach(filteredItems) { item in
-                    FeedPostCard(item: item)
+                    FeedPostCard(item: item) {
+                        selectedPostID = item.id
+                    }
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.visible)
                         .listRowSeparatorTint(AppTheme.border)
@@ -166,8 +172,13 @@ private enum FeedSheet: String, Identifiable {
     var id: String { rawValue }
 }
 
-private struct FeedPostCard: View {
+struct FeedPostCard: View {
+    @EnvironmentObject private var feedStore: FeedStore
     let item: FeedItem
+    let onOpen: () -> Void
+    @State private var showEditor = false
+    @State private var showDeleteConfirmation = false
+    @State private var operationError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -175,16 +186,23 @@ private struct FeedPostCard: View {
 
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(item.post.title)
-                        .font(.headline)
-                        .foregroundStyle(AppTheme.text)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button(action: onOpen) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(item.post.title)
+                                .font(.headline)
+                                .foregroundStyle(AppTheme.text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Text(item.post.body)
-                        .font(.body)
-                        .foregroundStyle(AppTheme.text.opacity(0.92))
-                        .lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(item.post.body)
+                                .font(.body)
+                                .foregroundStyle(AppTheme.text.opacity(0.92))
+                                .lineLimit(3)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open post \(item.post.title)")
 
                     if !item.post.photoPaths.isEmpty {
                         PostPhotoGrid(paths: item.post.photoPaths)
@@ -199,7 +217,7 @@ private struct FeedPostCard: View {
                         FeedRecipeSummary(recipe: recipe)
                     }
                     .buttonStyle(.plain)
-                    .frame(width: 144)
+                    .frame(width: 120)
                     .accessibilityLabel("Open recipe \(recipe.title)")
                 }
             }
@@ -207,28 +225,217 @@ private struct FeedPostCard: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(AppTheme.background)
+        .sheet(isPresented: $showEditor) {
+            PostComposerView(editing: item)
+        }
+        .confirmationDialog(
+            "Delete this post?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Post", role: .destructive) { deletePost() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This removes the post and its photos from the shared feed.")
+        }
+        .alert("Couldn’t delete post", isPresented: Binding(
+            get: { operationError != nil },
+            set: { if !$0 { operationError = nil } }
+        )) {
+            Button("OK") { operationError = nil }
+        } message: {
+            Text(operationError ?? "Please try again.")
+        }
     }
 
     private var authorRow: some View {
         HStack(spacing: 9) {
-            Text(item.author.displayName.initials)
+            Button(action: onOpen) {
+                HStack(spacing: 9) {
+                    Text(item.author.displayName.initials)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.black)
+                        .frame(width: 30, height: 30)
+                        .background(AppTheme.primary)
+                        .clipShape(Circle())
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(item.author.displayName)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(AppTheme.text)
+                        Text("@\(item.author.username)")
+                            .font(.caption2)
+                            .foregroundStyle(AppTheme.label)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open post by \(item.author.displayName), at \(item.author.username)")
+
+            Spacer()
+
+            if feedStore.currentUserID == item.post.authorID {
+                Menu {
+                    Button("Edit Post", systemImage: "pencil") { showEditor = true }
+                    Button("Delete Post", systemImage: "trash", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .foregroundStyle(AppTheme.label)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Post options")
+            }
+        }
+    }
+
+    private func deletePost() {
+        Task {
+            do {
+                try await feedStore.delete(post: item.post)
+            } catch {
+                operationError = error.localizedDescription
+            }
+        }
+    }
+}
+
+struct PostDetailView: View {
+    @EnvironmentObject private var feedStore: FeedStore
+    @Environment(\.dismiss) private var dismiss
+    let postID: UUID
+
+    private var item: FeedItem? {
+        feedStore.items.first { $0.id == postID }
+    }
+
+    var body: some View {
+        ZStack {
+            AppTheme.background.ignoresSafeArea()
+
+            if let item {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        PostDetailPhotoHeader(paths: item.post.photoPaths) {
+                            dismiss()
+                        }
+
+                        VStack(alignment: .leading, spacing: 16) {
+                            detailAuthorRow(item.author)
+
+                            Text(item.post.title)
+                                .font(.custom("Plus Jakarta Sans", size: 28).weight(.bold))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityAddTraits(.isHeader)
+
+                            Text(item.post.body)
+                                .font(.custom("Inter", size: 16))
+                                .foregroundStyle(AppTheme.text.opacity(0.92))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                            if let recipe = item.recipe {
+                                VStack(alignment: .leading, spacing: 9) {
+                                    Text("Linked Recipe")
+                                        .font(.custom("Plus Jakarta Sans", size: 20).weight(.semibold))
+                                        .foregroundStyle(AppTheme.text)
+
+                                    NavigationLink {
+                                        RecipeDetailView(recipe: recipe)
+                                    } label: {
+                                        FeedRecipeSummary(recipe: recipe)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Open recipe \(recipe.title)")
+                                }
+                            }
+                        }
+                        .padding(16)
+                        .padding(.bottom, 28)
+                        .background(AppTheme.background)
+                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14))
+                        .offset(y: item.post.photoPaths.isEmpty ? 0 : -14)
+                    }
+                }
+                .scrollIndicators(.hidden)
+            } else {
+                ContentUnavailableView("Post unavailable", systemImage: "text.bubble")
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private func detailAuthorRow(_ author: UserProfile) -> some View {
+        HStack(spacing: 9) {
+            Text(author.displayName.initials)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.black)
-                .frame(width: 30, height: 30)
+                .frame(width: 34, height: 34)
                 .background(AppTheme.primary)
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 0) {
-                Text(item.author.displayName)
+                Text(author.displayName)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(AppTheme.text)
-                Text("@\(item.author.username)")
+                Text("@\(author.username)")
                     .font(.caption2)
                     .foregroundStyle(AppTheme.label)
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Posted by \(item.author.displayName), at \(item.author.username)")
+        .accessibilityLabel("Posted by \(author.displayName), at \(author.username)")
+    }
+}
+
+private struct PostDetailPhotoHeader: View {
+    let paths: [String]
+    let onBack: () -> Void
+    @State private var currentIndex = 0
+    @State private var expandedPhoto: PostPhotoSelection?
+
+    private var visiblePaths: [String] { Array(paths.prefix(4)) }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if visiblePaths.isEmpty {
+                AppTheme.surface
+                    .frame(height: 72)
+            } else {
+                TabView(selection: $currentIndex) {
+                    ForEach(Array(visiblePaths.enumerated()), id: \.offset) { index, path in
+                        PostPhotoContent(path: path, contentMode: .fill)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 240)
+                            .clipped()
+                            .overlay(AppTheme.background.opacity(0.2))
+                            .contentShape(Rectangle())
+                            .onTapGesture { expandedPhoto = PostPhotoSelection(index: index) }
+                            .accessibilityLabel("Open photo \(index + 1) of \(visiblePaths.count) full screen")
+                            .tag(index)
+                    }
+                }
+                .frame(height: 240)
+                .tabViewStyle(.page(indexDisplayMode: visiblePaths.count > 1 ? .always : .never))
+            }
+
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+                    .frame(width: 32, height: 32)
+                    .background(AppTheme.background.opacity(0.94))
+                    .clipShape(Circle())
+            }
+            .padding(14)
+            .accessibilityLabel("Back")
+        }
+        .fullScreenCover(item: $expandedPhoto) { selection in
+            PostPhotoViewer(paths: visiblePaths, initialIndex: selection.index)
+        }
     }
 }
 
@@ -272,40 +479,116 @@ private struct FeedRecipeSummary: View {
 
 private struct PostPhotoGrid: View {
     let paths: [String]
-    private let spacing: CGFloat = 7
+    private let thumbnailSize: CGFloat = 88
+    private let spacing: CGFloat = 9
+    @State private var selection: PostPhotoSelection?
+
+    private var visiblePaths: [String] { Array(paths.prefix(4)) }
 
     var body: some View {
-        let visible = Array(paths.prefix(4))
-        Group {
-            if visible.count == 1 {
-                PostPhoto(path: visible[0])
-                    .frame(height: 150)
-            } else {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: spacing), GridItem(.flexible())], spacing: spacing) {
-                    ForEach(visible, id: \.self) { path in
-                        PostPhoto(path: path)
-                            .frame(height: visible.count == 2 ? 105 : 82)
-                    }
-                }
-            }
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: thumbnailSize, maximum: thumbnailSize), spacing: spacing)],
+            alignment: .leading,
+            spacing: spacing
+        ) {
+            photoButtons
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fullScreenCover(item: $selection) { selection in
+            PostPhotoViewer(paths: visiblePaths, initialIndex: selection.index)
+        }
+    }
+
+    @ViewBuilder
+    private var photoButtons: some View {
+        ForEach(Array(visiblePaths.enumerated()), id: \.offset) { index, path in
+            photoButton(path: path, index: index)
+                .frame(width: thumbnailSize, height: thumbnailSize)
+        }
+    }
+
+    private func photoButton(path: String, index: Int) -> some View {
+        Button {
+            selection = PostPhotoSelection(index: index)
+        } label: {
+            PostPhoto(path: path)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open photo \(index + 1) of \(visiblePaths.count) full screen")
     }
 }
 
 private struct PostPhoto: View {
+    let path: String
+
+    var body: some View {
+        PostPhotoContent(path: path, contentMode: .fill)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityLabel("Post photo")
+    }
+}
+
+private struct PostPhotoSelection: Identifiable {
+    let index: Int
+    var id: Int { index }
+}
+
+private struct PostPhotoViewer: View {
+    @Environment(\.dismiss) private var dismiss
+    let paths: [String]
+    @State private var selectedIndex: Int
+
+    init(paths: [String], initialIndex: Int) {
+        self.paths = paths
+        _selectedIndex = State(initialValue: initialIndex)
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            TabView(selection: $selectedIndex) {
+                ForEach(Array(paths.enumerated()), id: \.offset) { index, path in
+                    PostPhotoContent(path: path, contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.vertical, 64)
+                        .tag(index)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: paths.count > 1 ? .always : .never))
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(.black.opacity(0.55), in: Circle())
+            }
+            .padding(.top, 8)
+            .padding(.trailing, 16)
+            .accessibilityLabel("Close full-screen photo")
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct PostPhotoContent: View {
     @EnvironmentObject private var feedStore: FeedStore
     let path: String
+    let contentMode: ContentMode
 
     var body: some View {
         Group {
             if path.hasPrefix("asset:") {
                 Image(String(path.dropFirst("asset:".count)))
                     .resizable()
-                    .scaledToFill()
+                    .aspectRatio(contentMode: contentMode)
             } else if let data = feedStore.photoData[path], let image = UIImage(data: data) {
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .aspectRatio(contentMode: contentMode)
             } else {
                 ZStack {
                     AppTheme.surface
@@ -314,10 +597,6 @@ private struct PostPhoto: View {
                 .task(id: path) { await feedStore.loadPhoto(path: path) }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .accessibilityLabel("Post photo")
     }
 }
 
@@ -399,19 +678,31 @@ struct ProfileSetupView: View {
 struct PostComposerView: View {
     @EnvironmentObject private var feedStore: FeedStore
     @Environment(\.dismiss) private var dismiss
-    @State private var title = ""
-    @State private var details = ""
+    let editingItem: FeedItem?
+    @State private var title: String
+    @State private var details: String
     @State private var selectedRecipe: Recipe?
+    @State private var existingPhotoPaths: [String]
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var photos: [Data] = []
     @State private var showRecipePicker = false
     @State private var isPublishing = false
     @State private var errorMessage: String?
 
+    init(editing item: FeedItem? = nil) {
+        editingItem = item
+        _title = State(initialValue: item?.post.title ?? "")
+        _details = State(initialValue: item?.post.body ?? "")
+        _selectedRecipe = State(initialValue: item?.recipe)
+        _existingPhotoPaths = State(initialValue: item?.post.photoPaths ?? [])
+    }
+
+    private var photoCount: Int { existingPhotoPaths.count + photos.count }
+
     private var canPublish: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && photos.count <= 4
+            && photoCount <= 4
             && !isPublishing
     }
 
@@ -437,34 +728,56 @@ struct PostComposerView: View {
 
                 Section("Recipe") {
                     if let selectedRecipe {
-                        HStack(spacing: 12) {
-                            Image(systemName: "fork.knife")
-                                .foregroundStyle(AppTheme.primary)
-                            VStack(alignment: .leading) {
-                                Text(selectedRecipe.title)
-                                Text("\(selectedRecipe.ingredients.count) ingredients")
-                                    .font(.caption)
-                                    .foregroundStyle(AppTheme.label)
-                            }
-                            Spacer()
-                            Button(role: .destructive) { self.selectedRecipe = nil } label: {
-                                Image(systemName: "xmark.circle.fill")
+                        ZStack(alignment: .topTrailing) {
+                            Button { showRecipePicker = true } label: {
+                                RecipeSelectionCard(recipe: selectedRecipe)
                             }
                             .buttonStyle(.plain)
+
+                            Button(role: .destructive) { self.selectedRecipe = nil } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .black.opacity(0.7))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(8)
                             .accessibilityLabel("Remove linked recipe")
                         }
                     } else {
-                        Button("Add Recipe", systemImage: "plus") { showRecipePicker = true }
+                        Button { showRecipePicker = true } label: {
+                            composerActionLabel("Add Recipe", systemImage: "fork.knife")
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
                 Section {
-                    PhotosPicker(selection: $photoItems, maxSelectionCount: 4, matching: .images) {
-                        Label(photos.isEmpty ? "Add Photos" : "Choose Different Photos", systemImage: "photo.on.rectangle.angled")
+                    if photoCount < 4 {
+                        PhotosPicker(
+                            selection: $photoItems,
+                            maxSelectionCount: 4 - existingPhotoPaths.count,
+                            matching: .images
+                        ) {
+                            composerActionLabel(
+                                photoCount == 0 ? "Add Photos" : "Add More Photos",
+                                systemImage: "photo.on.rectangle.angled"
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
 
-                    if !photos.isEmpty {
+                    if photoCount > 0 {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                            ForEach(Array(existingPhotoPaths.enumerated()), id: \.element) { index, path in
+                                ZStack(alignment: .topTrailing) {
+                                    PostPhoto(path: path)
+                                        .frame(height: 110)
+                                    removeButton(label: "Remove existing photo \(index + 1)") {
+                                        existingPhotoPaths.removeAll { $0 == path }
+                                    }
+                                }
+                            }
+
                             ForEach(Array(photos.enumerated()), id: \.offset) { index, data in
                                 if let image = UIImage(data: data) {
                                     ZStack(alignment: .topTrailing) {
@@ -474,14 +787,9 @@ struct PostComposerView: View {
                                             .frame(height: 110)
                                             .clipped()
                                             .clipShape(RoundedRectangle(cornerRadius: 10))
-                                        Button { removePhoto(at: index) } label: {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .symbolRenderingMode(.palette)
-                                                .foregroundStyle(.white, .black.opacity(0.7))
+                                        removeButton(label: "Remove new photo \(index + 1)") {
+                                            removePhoto(at: index)
                                         }
-                                        .buttonStyle(.plain)
-                                        .padding(6)
-                                        .accessibilityLabel("Remove photo \(index + 1)")
                                     }
                                 }
                             }
@@ -491,7 +799,7 @@ struct PostComposerView: View {
                     HStack {
                         Text("Photos")
                         Spacer()
-                        Text("\(photos.count)/4")
+                        Text("\(photoCount)/4")
                     }
                 }
 
@@ -501,7 +809,7 @@ struct PostComposerView: View {
             }
             .scrollContentBackground(.hidden)
             .background(AppTheme.background)
-            .navigationTitle("New Post")
+            .navigationTitle(editingItem == nil ? "New Post" : "Edit Post")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -510,7 +818,7 @@ struct PostComposerView: View {
                         .accessibilityLabel("Close post composer")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Publish", action: publish)
+                    Button(editingItem == nil ? "Publish" : "Save", action: publish)
                         .buttonStyle(.borderedProminent)
                         .tint(AppTheme.primary)
                         .disabled(!canPublish)
@@ -524,13 +832,34 @@ struct PostComposerView: View {
                 if isPublishing {
                     ZStack {
                         Color.black.opacity(0.25).ignoresSafeArea()
-                        ProgressView("Publishing…")
+                        ProgressView(editingItem == nil ? "Publishing…" : "Saving…")
                             .padding()
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                     }
                 }
             }
         }
+    }
+
+    private func composerActionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(AppTheme.primary)
+            .foregroundStyle(.black)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func removeButton(label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark.circle.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, .black.opacity(0.7))
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .accessibilityLabel(label)
     }
 
     private func loadSelectedPhotos() async {
@@ -555,7 +884,18 @@ struct PostComposerView: View {
             isPublishing = true
             errorMessage = nil
             do {
-                try await feedStore.publish(title: title, body: details, recipe: selectedRecipe, photos: photos)
+                if let editingItem {
+                    try await feedStore.update(
+                        post: editingItem.post,
+                        title: title,
+                        body: details,
+                        recipe: selectedRecipe,
+                        retainedPhotoPaths: existingPhotoPaths,
+                        newPhotos: photos
+                    )
+                } else {
+                    try await feedStore.publish(title: title, body: details, recipe: selectedRecipe, photos: photos)
+                }
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
@@ -570,46 +910,98 @@ private struct FeedRecipePicker: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var selectedRecipe: Recipe?
     @State private var query = ""
+    @State private var selectedTag: String?
+
+    private var tags: [String] { Array(Set(mealStore.recipes.flatMap(\.tags))).sorted() }
 
     private var filteredRecipes: [Recipe] {
         mealStore.recipes.filter { recipe in
             let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            return query.isEmpty
+            let matchesQuery = query.isEmpty
                 || recipe.title.localizedCaseInsensitiveContains(query)
+                || recipe.author.localizedCaseInsensitiveContains(query)
                 || recipe.ingredients.contains { $0.display.localizedCaseInsensitiveContains(query) }
+            return matchesQuery && (selectedTag == nil || recipe.tags.contains(selectedTag!))
         }
     }
 
     var body: some View {
         NavigationStack {
-            List(filteredRecipes) { recipe in
-                Button {
-                    selectedRecipe = recipe
-                    dismiss()
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "fork.knife.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(AppTheme.primary)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(recipe.title).foregroundStyle(AppTheme.text)
-                            Text("\(recipe.ingredients.count) ingredients")
-                                .font(.caption)
-                                .foregroundStyle(AppTheme.label)
+            ZStack {
+                AppTheme.background.ignoresSafeArea()
+                VStack(spacing: 12) {
+                    HStack {
+                        Spacer().frame(width: 30)
+                        Spacer()
+                        Text("Add Recipe")
+                            .font(.custom("Plus Jakarta Sans", size: 28).weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+                        Spacer()
+                        Button { dismiss() } label: {
+                            Image(systemName: "xmark")
+                                .font(.title3.weight(.medium))
+                                .foregroundStyle(AppTheme.text)
+                                .frame(width: 30, height: 30)
                         }
                     }
+                    Text("Choose a recipe to link to this post")
+                        .font(.custom("Inter", size: 12))
+                        .foregroundStyle(AppTheme.label)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    HStack(spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(AppTheme.label)
+                            TextField("Search", text: $query).foregroundStyle(AppTheme.text)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: 34)
+                        .background(AppTheme.input)
+                        .clipShape(Capsule())
+
+                        Menu {
+                            Button("All Labels") { selectedTag = nil }
+                            ForEach(tags, id: \.self) { tag in Button(tag) { selectedTag = tag } }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(selectedTag ?? "Label")
+                                Image(systemName: "chevron.down").font(.caption2)
+                            }
+                            .font(.custom("Inter", size: 14))
+                            .foregroundStyle(AppTheme.label)
+                            .padding(.horizontal, 12)
+                            .frame(height: 34)
+                            .background(AppTheme.input)
+                            .clipShape(Capsule())
+                        }
+                    }
+
+                    ScrollView {
+                        LazyVStack(spacing: 9) {
+                            if filteredRecipes.isEmpty {
+                                Text("No recipes found")
+                                    .font(.custom("Inter", size: 14))
+                                    .foregroundStyle(AppTheme.label)
+                                    .padding(.top, 30)
+                            } else {
+                                ForEach(filteredRecipes) { recipe in
+                                    Button {
+                                        selectedRecipe = recipe
+                                        dismiss()
+                                    } label: {
+                                        RecipeSelectionCard(recipe: recipe)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .padding(.top, 1)
+                        .padding(.bottom, 12)
+                    }
+                    .scrollIndicators(.hidden)
                 }
-                .listRowBackground(AppTheme.surface)
-            }
-            .scrollContentBackground(.hidden)
-            .background(AppTheme.background)
-            .navigationTitle("Choose Recipe")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, prompt: "Search recipes or ingredients")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
             }
         }
     }
