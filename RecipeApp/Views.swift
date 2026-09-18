@@ -1116,28 +1116,31 @@ struct RecipeCard: View {
 }
 
 struct RecipeDetailView: View {
-    @EnvironmentObject private var store: MealStore; @EnvironmentObject private var feedStore: FeedStore; @EnvironmentObject private var householdStore: HouseholdStore; @Environment(\.dismiss) private var dismiss; let recipe: Recipe; var allowsHouseholdSharing = true; @State private var scale = 1.0; @State private var ingredientsOpen = true; @State private var stepsOpen = false; @State private var nutritionOpen = false; @State private var shareMessage: String?
+    @EnvironmentObject private var store: MealStore; @EnvironmentObject private var feedStore: FeedStore; @EnvironmentObject private var householdStore: HouseholdStore; @Environment(\.dismiss) private var dismiss; let recipe: Recipe; var allowsHouseholdSharing = true; @State private var scale = 1.0; @State private var ingredientsOpen = true; @State private var stepsOpen = false; @State private var nutritionOpen = false; @State private var shareMessage: String?; @State private var showEdit = false
     var body: some View { ZStack { AppTheme.background.ignoresSafeArea(); ScrollView { VStack(spacing: 0) {
         ZStack(alignment: .top) {
             Group {
-                if let data = recipe.imageData, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() }
+                if let data = displayedRecipe.imageData, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() }
                 else { Image("FigmaHero").resizable().scaledToFill() }
             }.frame(height: 180).clipped().overlay(AppTheme.background.opacity(0.28))
-            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text).frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle()) }; Spacer(); if allowsHouseholdSharing { Button { Task { try? await feedStore.toggleRecipeFavourite(recipeID: recipe.id) } } label: { Image(systemName: feedStore.favouritedRecipeIDs.contains(recipe.id) ? "star.fill" : "star").foregroundStyle(feedStore.favouritedRecipeIDs.contains(recipe.id) ? AppTheme.primary : AppTheme.text) }.accessibilityLabel(feedStore.favouritedRecipeIDs.contains(recipe.id) ? "Remove recipe from favourites" : "Favourite recipe"); Button { shareRecipe() } label: { Image(systemName: "house.badge.plus") }.accessibilityLabel("Share recipe to household") } }.font(.body.weight(.semibold)).foregroundStyle(AppTheme.text).padding(.horizontal, 16).padding(.top, 14)
+            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text).frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle()) }; Spacer(); if allowsHouseholdSharing { Button { Task { try? await feedStore.toggleRecipeFavourite(recipeID: displayedRecipe.id) } } label: { Image(systemName: feedStore.favouritedRecipeIDs.contains(displayedRecipe.id) ? "star.fill" : "star").foregroundStyle(feedStore.favouritedRecipeIDs.contains(displayedRecipe.id) ? AppTheme.primary : AppTheme.text) }.accessibilityLabel(feedStore.favouritedRecipeIDs.contains(displayedRecipe.id) ? "Remove recipe from favourites" : "Favourite recipe"); Button { shareRecipe() } label: { Image(systemName: "house.badge.plus") }.accessibilityLabel("Share recipe to household") }; if isPersonalRecipe { Button { showEdit = true } label: { Image(systemName: "pencil") }.accessibilityLabel("Edit recipe") } }.font(.body.weight(.semibold)).foregroundStyle(AppTheme.text).padding(.horizontal, 16).padding(.top, 14)
         }
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) { Circle().fill(AppTheme.primary.opacity(0.35)).frame(width: 25, height: 25).overlay(Image(systemName: "person.fill").font(.caption)); VStack(alignment: .leading, spacing: 0) { Text(recipe.author).font(.custom("Inter", size: 12).weight(.medium)); Text("@\(recipe.author.lowercased())").font(.custom("Inter", size: 10)).foregroundStyle(AppTheme.label) }; Spacer(); VStack(alignment: .trailing, spacing: 2) { Label("4.8 (30)", systemImage: "star.fill").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.primary); Text("30 Minutes").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label) } }
-            Text(recipe.title).font(.custom("Plus Jakarta Sans", size: 28).weight(.bold)).foregroundStyle(AppTheme.text)
-            Text(recipe.summary).font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
-            Accordion(title: "Ingredients", isOpen: $ingredientsOpen) { Picker("Scale", selection: $scale) { Text("0.5×").tag(0.5); Text("1×").tag(1.0); Text("2×").tag(2.0) }.pickerStyle(.segmented); ForEach(recipe.ingredients) { item in Text("• \((item.quantity * scale).formatted(.number.precision(.fractionLength(0...2)))) \(item.unit) \(item.name)").font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text).frame(maxWidth: .infinity, alignment: .leading) } }
-            Accordion(title: "Instructions", isOpen: $stepsOpen) { ForEach(Array(recipe.steps.enumerated()), id: \.element.id) { index, step in Text("\(index + 1). \(step.text)").font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 4) } }
-            Accordion(title: "Nutrition Facts", isOpen: $nutritionOpen) { ForEach(recipe.nutrition) { fact in HStack { Text(fact.name); Spacer(); Text("\(fact.amount.formatted()) \(fact.unit)") }.font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text) } }
+            HStack(spacing: 8) { Circle().fill(AppTheme.primary.opacity(0.35)).frame(width: 25, height: 25).overlay(Image(systemName: "person.fill").font(.caption)); VStack(alignment: .leading, spacing: 0) { Text(displayedRecipe.author).font(.custom("Inter", size: 12).weight(.medium)); Text("@\(displayedRecipe.author.lowercased())").font(.custom("Inter", size: 10)).foregroundStyle(AppTheme.label) }; Spacer(); VStack(alignment: .trailing, spacing: 2) { Label("4.8 (30)", systemImage: "star.fill").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.primary); Text("30 Minutes").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label) } }
+            Text(displayedRecipe.title).font(.custom("Plus Jakarta Sans", size: 28).weight(.bold)).foregroundStyle(AppTheme.text)
+            Text(displayedRecipe.summary).font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
+            Accordion(title: "Ingredients", isOpen: $ingredientsOpen) { Picker("Scale", selection: $scale) { Text("0.5×").tag(0.5); Text("1×").tag(1.0); Text("2×").tag(2.0) }.pickerStyle(.segmented); ForEach(displayedRecipe.ingredients) { item in Text("• \((item.quantity * scale).formatted(.number.precision(.fractionLength(0...2)))) \(item.unit) \(item.name)").font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text).frame(maxWidth: .infinity, alignment: .leading) } }
+            Accordion(title: "Instructions", isOpen: $stepsOpen) { ForEach(Array(displayedRecipe.steps.enumerated()), id: \.element.id) { index, step in Text("\(index + 1). \(step.text)").font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 4) } }
+            Accordion(title: "Nutrition Facts", isOpen: $nutritionOpen) { ForEach(displayedRecipe.nutrition) { fact in HStack { Text(fact.name); Spacer(); Text("\(fact.amount.formatted()) \(fact.unit)") }.font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text) } }
         }.padding(16).padding(.bottom, 28).background(AppTheme.background).clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12)).offset(y: -15)
-    } }.scrollIndicators(.hidden) }.toolbar(.hidden, for: .navigationBar).alert("Household", isPresented: Binding(get: { shareMessage != nil }, set: { if !$0 { shareMessage = nil } })) { Button("OK", role: .cancel) {} } message: { Text(shareMessage ?? "") } }
+    } }.scrollIndicators(.hidden) }.toolbar(.hidden, for: .navigationBar).sheet(isPresented: $showEdit) { if let currentRecipe = store.recipe(recipe.id) { RecipeEditor(recipe: currentRecipe) } }.alert("Household", isPresented: Binding(get: { shareMessage != nil }, set: { if !$0 { shareMessage = nil } })) { Button("OK", role: .cancel) {} } message: { Text(shareMessage ?? "") } }
+
+    private var isPersonalRecipe: Bool { store.recipe(recipe.id) != nil }
+    private var displayedRecipe: Recipe { store.recipe(recipe.id) ?? recipe }
 
     private func shareRecipe() {
         guard householdStore.household != nil else { shareMessage = "Create or join a household before sharing recipes."; return }
-        Task { do { try await householdStore.share(recipe: recipe); shareMessage = "Recipe shared with \(householdStore.household?.name ?? "your household")." } catch { shareMessage = error.localizedDescription } }
+        Task { do { try await householdStore.share(recipe: displayedRecipe); shareMessage = "Recipe shared with \(householdStore.household?.name ?? "your household")." } catch { shareMessage = error.localizedDescription } }
     }
 }
 
@@ -1145,7 +1148,21 @@ struct Accordion<Content: View>: View { let title: String; @Binding var isOpen: 
 
 struct RecipeEditor: View {
     @EnvironmentObject private var store: MealStore; @Environment(\.dismiss) private var dismiss
-    @State private var title = ""; @State private var summary = ""; @State private var author = ""; @State private var servings = 4; @State private var tags = ""; @State private var ingredients = [Ingredient(name: "", quantity: 1, unit: "cups")]; @State private var steps = [RecipeStep(text: "")]; @State private var nutrition: [NutritionFact] = []; @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?
+    let recipe: Recipe?
+    @State private var title: String; @State private var summary: String; @State private var author: String; @State private var servings: Int; @State private var tags: String; @State private var ingredients: [Ingredient]; @State private var steps: [RecipeStep]; @State private var nutrition: [NutritionFact]; @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?
+
+    init(recipe: Recipe? = nil) {
+        self.recipe = recipe
+        _title = State(initialValue: recipe?.title ?? "")
+        _summary = State(initialValue: recipe?.summary ?? "")
+        _author = State(initialValue: recipe?.author ?? "")
+        _servings = State(initialValue: recipe?.servings ?? 4)
+        _tags = State(initialValue: recipe?.tags.joined(separator: ", ") ?? "")
+        _ingredients = State(initialValue: recipe?.ingredients ?? [Ingredient(name: "", quantity: 1, unit: "cups")])
+        _steps = State(initialValue: recipe?.steps ?? [RecipeStep(text: "")])
+        _nutrition = State(initialValue: recipe?.nutrition ?? [])
+        _imageData = State(initialValue: recipe?.imageData)
+    }
     var body: some View {
         NavigationStack {
             ZStack {
@@ -1210,14 +1227,14 @@ struct RecipeEditor: View {
             }
             SurfaceCard { VStack(alignment: .leading, spacing: 9) { Text("Instructions").font(.custom("Plus Jakarta Sans", size: 22).weight(.semibold)); ForEach($steps) { $step in TextField("Add Instructions", text: $step.text, axis: .vertical).lineLimit(2...4).figmaInput() }; Button("Add Step", systemImage: "plus") { steps.append(RecipeStep(text: "")) }.buttonStyle(.bordered).tint(AppTheme.primary) } }
             NutritionFactsEditorCard(nutrition: $nutrition)
-            PrimaryButton(title: "Save Recipe") { saveRecipe() }
+            PrimaryButton(title: recipe == nil ? "Save Recipe" : "Save Changes") { saveRecipe() }
         }
     }
 
     private func saveRecipe() {
-        let recipe = Recipe(title: title.trimmingCharacters(in: .whitespacesAndNewlines), summary: summary, author: author.isEmpty ? "Me" : author, servings: servings, tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }, ingredients: ingredients.filter { !$0.name.isEmpty }, steps: steps.filter { !$0.text.isEmpty }, nutrition: nutrition.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, imageData: imageData)
-        guard !recipe.title.isEmpty, !recipe.ingredients.isEmpty, !recipe.steps.isEmpty else { return }
-        store.save(recipe: recipe)
+        let updatedRecipe = Recipe(id: recipe?.id ?? UUID(), title: title.trimmingCharacters(in: .whitespacesAndNewlines), summary: summary, author: author.isEmpty ? "Me" : author, servings: servings, tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }, ingredients: ingredients.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, steps: steps.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, nutrition: nutrition.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, imageData: imageData, notes: recipe?.notes ?? "", createdAt: recipe?.createdAt ?? Date())
+        guard !updatedRecipe.title.isEmpty, !updatedRecipe.ingredients.isEmpty, !updatedRecipe.steps.isEmpty else { return }
+        store.save(recipe: updatedRecipe)
         dismiss()
     }
 }
