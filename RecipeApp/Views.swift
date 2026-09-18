@@ -73,7 +73,12 @@ struct EmailCodeSignInView: View {
         ZStack {
             AppTheme.background.ignoresSafeArea()
             if authentication.pendingKind != nil {
-                AuthCodeVerificationView()
+                AuthCodeVerificationView {
+                    email = authentication.pendingEmail ?? email
+                    mode = .signIn
+                    passwordConfirmation = ""
+                    authentication.cancelPendingFlow()
+                }
             } else {
                 ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -269,6 +274,7 @@ private struct PasswordRequirementsView: View {
 
 private struct AuthCodeVerificationView: View {
     @EnvironmentObject private var authentication: AuthenticationStore
+    let onUseConfirmationLink: () -> Void
     @State private var code = ""
     @State private var replacementUsername = ""
     @State private var needsUsername = false
@@ -298,14 +304,18 @@ private struct AuthCodeVerificationView: View {
                     TextField("Username", text: $replacementUsername).figmaInput().textInputAutocapitalization(.never).autocorrectionDisabled()
                     primaryButton("Finish account", disabled: !UsernamePolicy.isValid(replacementUsername)) { claimUsername() }
                 } else {
-                    Text("Enter the six-digit code sent to \(maskedEmail).")
+                    Text(verificationInstructions)
                         .font(.custom("Inter", size: 16)).foregroundStyle(AppTheme.label)
                     TextField("000000", text: $code)
                         .figmaInput().keyboardType(.numberPad).textContentType(.oneTimeCode)
                         .onChange(of: code) { code = String(code.filter(\.isNumber).prefix(6)) }
                     primaryButton("Verify code", disabled: code.count != 6) { verify() }
-                    Button(resendSeconds > 0 ? "Resend in \(resendSeconds)s" : "Resend code") { resend() }
+                    Button(resendSeconds > 0 ? "Resend in \(resendSeconds)s" : "Resend email") { resend() }
                         .disabled(resendSeconds > 0).authSecondaryButton()
+                    if authentication.pendingKind == .signup {
+                        Button("I confirmed using the email link") { onUseConfirmationLink() }
+                            .authSecondaryButton()
+                    }
                     Button("Use a different email") { authentication.cancelPendingFlow() }.authSecondaryButton()
                 }
 
@@ -324,6 +334,13 @@ private struct AuthCodeVerificationView: View {
         guard let email = authentication.pendingEmail, let at = email.firstIndex(of: "@") else { return "your email" }
         let name = email[..<at]
         return "\(name.prefix(1))•••\(email[at...])"
+    }
+
+    private var verificationInstructions: String {
+        if authentication.pendingKind == .signup {
+            return "Open the email sent to \(maskedEmail). Enter its six-digit code, or use its confirmation link and then return here."
+        }
+        return "Enter the six-digit recovery code sent to \(maskedEmail)."
     }
 
     private func primaryButton(_ title: String, disabled: Bool, action: @escaping () -> Void) -> some View {
@@ -1128,7 +1145,7 @@ struct Accordion<Content: View>: View { let title: String; @Binding var isOpen: 
 
 struct RecipeEditor: View {
     @EnvironmentObject private var store: MealStore; @Environment(\.dismiss) private var dismiss
-    @State private var title = ""; @State private var summary = ""; @State private var author = ""; @State private var servings = 4; @State private var tags = ""; @State private var ingredients = [Ingredient(name: "", quantity: 1, unit: "cups")]; @State private var steps = [RecipeStep(text: "")]; @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?
+    @State private var title = ""; @State private var summary = ""; @State private var author = ""; @State private var servings = 4; @State private var tags = ""; @State private var ingredients = [Ingredient(name: "", quantity: 1, unit: "cups")]; @State private var steps = [RecipeStep(text: "")]; @State private var nutrition: [NutritionFact] = []; @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?
     var body: some View {
         NavigationStack {
             ZStack {
@@ -1192,12 +1209,13 @@ struct RecipeEditor: View {
                 }
             }
             SurfaceCard { VStack(alignment: .leading, spacing: 9) { Text("Instructions").font(.custom("Plus Jakarta Sans", size: 22).weight(.semibold)); ForEach($steps) { $step in TextField("Add Instructions", text: $step.text, axis: .vertical).lineLimit(2...4).figmaInput() }; Button("Add Step", systemImage: "plus") { steps.append(RecipeStep(text: "")) }.buttonStyle(.bordered).tint(AppTheme.primary) } }
+            NutritionFactsEditorCard(nutrition: $nutrition)
             PrimaryButton(title: "Save Recipe") { saveRecipe() }
         }
     }
 
     private func saveRecipe() {
-        let recipe = Recipe(title: title.trimmingCharacters(in: .whitespacesAndNewlines), summary: summary, author: author.isEmpty ? "Me" : author, servings: servings, tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }, ingredients: ingredients.filter { !$0.name.isEmpty }, steps: steps.filter { !$0.text.isEmpty }, nutrition: [], imageData: imageData)
+        let recipe = Recipe(title: title.trimmingCharacters(in: .whitespacesAndNewlines), summary: summary, author: author.isEmpty ? "Me" : author, servings: servings, tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }, ingredients: ingredients.filter { !$0.name.isEmpty }, steps: steps.filter { !$0.text.isEmpty }, nutrition: nutrition.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, imageData: imageData)
         guard !recipe.title.isEmpty, !recipe.ingredients.isEmpty, !recipe.steps.isEmpty else { return }
         store.save(recipe: recipe)
         dismiss()
@@ -1214,6 +1232,77 @@ struct IngredientInputRow: View {
                 TextField("Ingredient", text: $ingredient.name).figmaInput().frame(width: columnWidth)
                 TextField("Quantity", value: $ingredient.quantity, format: .number).figmaInput().frame(width: columnWidth)
                 TextField("Measure", text: $ingredient.unit).figmaInput().frame(width: columnWidth)
+            }
+        }
+        .frame(height: 44)
+    }
+}
+
+struct NutritionFactsEditorCard: View {
+    @Binding var nutrition: [NutritionFact]
+
+    var body: some View {
+        SurfaceCard {
+            VStack(alignment: .leading, spacing: 9) {
+                Text("Nutrition Facts")
+                    .font(.custom("Plus Jakarta Sans", size: 22).weight(.semibold))
+
+                if nutrition.isEmpty {
+                    Text("Optional — add calories, macros, or any nutrient per serving.")
+                        .font(.custom("Inter", size: 12))
+                        .foregroundStyle(AppTheme.label)
+                } else {
+                    HStack(spacing: 8) {
+                        Text("Nutrient").frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Amount").frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Unit").frame(maxWidth: .infinity, alignment: .leading)
+                        Color.clear.frame(width: 32)
+                    }
+                    .font(.custom("Inter", size: 12))
+                    .foregroundStyle(AppTheme.label)
+
+                    ForEach($nutrition) { $fact in
+                        NutritionInputRow(fact: $fact) {
+                            nutrition.removeAll { $0.id == fact.id }
+                        }
+                    }
+                }
+
+                Button(nutrition.isEmpty ? "Add nutrition" : "Add nutrient", systemImage: "plus") {
+                    nutrition.append(NutritionFact(name: nutrition.isEmpty ? "Calories" : "", amount: 0, unit: nutrition.isEmpty ? "kcal" : "g"))
+                }
+                .buttonStyle(.bordered)
+                .tint(AppTheme.primary)
+                .accessibilityHint("Adds a nutrition fact with nutrient, amount, and unit fields")
+            }
+        }
+    }
+}
+
+struct NutritionInputRow: View {
+    @Binding var fact: NutritionFact
+    let remove: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            let fieldWidth = (geometry.size.width - 24 - 32) / 3
+            HStack(spacing: 8) {
+                TextField("Nutrient", text: $fact.name)
+                    .figmaInput()
+                    .frame(width: fieldWidth)
+                TextField("Amount", value: $fact.amount, format: .number)
+                    .keyboardType(.decimalPad)
+                    .figmaInput()
+                    .frame(width: fieldWidth)
+                TextField("Unit", text: $fact.unit)
+                    .figmaInput()
+                    .frame(width: fieldWidth)
+                Button(action: remove) {
+                    Image(systemName: "minus.circle.fill")
+                        .foregroundStyle(AppTheme.label)
+                        .frame(width: 32, height: 44)
+                }
+                .accessibilityLabel("Remove \(fact.name.isEmpty ? "nutrition fact" : fact.name)")
             }
         }
         .frame(height: 44)

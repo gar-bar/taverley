@@ -277,6 +277,7 @@ struct HouseholdRecipeEditor: View {
     @State private var tags: String
     @State private var ingredients: [Ingredient]
     @State private var steps: [RecipeStep]
+    @State private var nutrition: [NutritionFact]
     @State private var photoItem: PhotosPickerItem?
     @State private var imageData: Data?
     @State private var isSaving = false
@@ -292,6 +293,7 @@ struct HouseholdRecipeEditor: View {
         _tags = State(initialValue: recipe?.tags.joined(separator: ", ") ?? "")
         _ingredients = State(initialValue: recipe?.ingredients ?? [Ingredient(name: "", quantity: 1, unit: "cups")])
         _steps = State(initialValue: recipe?.steps ?? [RecipeStep(text: "")])
+        _nutrition = State(initialValue: recipe?.nutrition ?? [])
         _imageData = State(initialValue: recipe?.imageData)
     }
 
@@ -388,6 +390,7 @@ struct HouseholdRecipeEditor: View {
                         .buttonStyle(.bordered).tint(AppTheme.primary)
                 }
             }
+            NutritionFactsEditorCard(nutrition: $nutrition)
             PrimaryButton(title: isSaving ? "Saving…" : "Save Recipe") { save() }
                 .disabled(isSaving || !isValid)
         }
@@ -409,7 +412,7 @@ struct HouseholdRecipeEditor: View {
             tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
             ingredients: ingredients.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             steps: steps.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
-            nutrition: item?.recipe.nutrition ?? [],
+            nutrition: nutrition.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             imageData: imageData,
             notes: item?.recipe.notes ?? "",
             createdAt: item?.recipe.createdAt ?? Date()

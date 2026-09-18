@@ -80,6 +80,18 @@ struct FeedFeatureTests {
         #expect(decoded.photoPaths.isEmpty)
     }
 
+    @Test func recipeNutritionFactsRoundTrip() throws {
+        let facts = [
+            NutritionFact(name: "Calories", amount: 420, unit: "kcal"),
+            NutritionFact(name: "Protein", amount: 24, unit: "g")
+        ]
+        let recipe = Recipe(title: "Protein Pasta", summary: "", author: "Cook", servings: 2, tags: [], ingredients: [], steps: [], nutrition: facts)
+        let decoded = try JSONDecoder().decode(Recipe.self, from: JSONEncoder().encode(recipe))
+
+        #expect(decoded.nutrition == facts)
+        #expect(decoded.calories == 420)
+    }
+
     @Test func favouriteFiltersAreExclusiveAndStartWithRecipes() {
         let selected = FavouriteKind.recipes
 

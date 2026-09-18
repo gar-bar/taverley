@@ -2,8 +2,8 @@
 
 1. In the Supabase Dashboard, open **SQL Editor** and run [the initial migration](migrations/20260913112000_account_data.sql). It creates private, user-owned profile, recipe, meal-plan, and calendar tables protected by Row Level Security.
 2. In **Authentication → Providers → Email**, enable email signup and **Confirm Email**. Set the minimum password length to 12 and require a number and symbol.
-3. Install [confirm-signup.html](templates/confirm-signup.html) as the Confirm signup template and [recovery.html](templates/recovery.html) as the Reset password template. Both use the six-digit `{{ .Token }}` flow expected by the app.
-4. Before external testing or launch, configure a custom SMTP provider and sender domain.
+3. Configure a custom SMTP provider and sender domain. Supabase keeps template editing disabled while its default sender is active.
+4. Install [confirm-signup.html](templates/confirm-signup.html) as the Confirm signup template and [recovery.html](templates/recovery.html) as the Reset password template. Both use the six-digit `{{ .Token }}` flow expected by the app. Until custom SMTP is configured, signup also supports Supabase's default confirmation link and returns the user to password sign-in.
 
 ## Shared feed setup
 
