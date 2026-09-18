@@ -31,6 +31,11 @@ struct FeedView: View {
             .toolbarBackground(AppTheme.background, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                if authentication.session != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        HouseholdNotificationButton()
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: createPost) {
                         Image(systemName: "plus")
@@ -254,25 +259,20 @@ struct FeedPostCard: View {
         HStack(spacing: 9) {
             Button(action: onOpen) {
                 HStack(spacing: 9) {
-                    Text(item.author.displayName.initials)
+                    Text(item.author.username.initials)
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.black)
                         .frame(width: 30, height: 30)
                         .background(AppTheme.primary)
                         .clipShape(Circle())
 
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(item.author.displayName)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(AppTheme.text)
-                        Text("@\(item.author.username)")
-                            .font(.caption2)
-                            .foregroundStyle(AppTheme.label)
-                    }
+                    Text(item.author.username)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.text)
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Open post by \(item.author.displayName), at \(item.author.username)")
+            .accessibilityLabel("Open post by \(item.author.username)")
 
             Spacer()
 
@@ -379,12 +379,23 @@ struct PostDetailView: View {
     @EnvironmentObject private var feedStore: FeedStore
     @Environment(\.dismiss) private var dismiss
     let postID: UUID
+    let initialItem: FeedItem?
     @State private var commentText = ""
     @State private var commentError: String?
     @FocusState private var isCommentFocused: Bool
 
+    init(postID: UUID, initialItem: FeedItem? = nil) {
+        self.postID = postID
+        self.initialItem = initialItem
+    }
+
+    init(item: FeedItem) {
+        postID = item.id
+        initialItem = item
+    }
+
     private var item: FeedItem? {
-        feedStore.items.first { $0.id == postID }
+        feedStore.items.first { $0.id == postID } ?? initialItem
     }
 
     var body: some View {
@@ -460,24 +471,19 @@ struct PostDetailView: View {
 
     private func detailAuthorRow(_ author: UserProfile) -> some View {
         HStack(spacing: 9) {
-            Text(author.displayName.initials)
+            Text(author.username.initials)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.black)
                 .frame(width: 34, height: 34)
                 .background(AppTheme.primary)
                 .clipShape(Circle())
 
-            VStack(alignment: .leading, spacing: 0) {
-                Text(author.displayName)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(AppTheme.text)
-                Text("@\(author.username)")
-                    .font(.caption2)
-                    .foregroundStyle(AppTheme.label)
-            }
+            Text(author.username)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AppTheme.text)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Posted by \(author.displayName), at \(author.username)")
+        .accessibilityLabel("Posted by \(author.username)")
     }
 
     private func commentsSection(for postID: UUID) -> some View {
@@ -494,7 +500,7 @@ struct PostDetailView: View {
             } else {
                 ForEach(comments) { comment in
                     HStack(alignment: .top, spacing: 9) {
-                        Text(comment.author.displayName.initials)
+                        Text(comment.author.username.initials)
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.black)
                             .frame(width: 28, height: 28)
@@ -502,7 +508,7 @@ struct PostDetailView: View {
                             .clipShape(Circle())
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(comment.author.displayName)
+                            Text(comment.author.username)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppTheme.text)
                             Text(comment.comment.body)
@@ -764,22 +770,18 @@ struct ProfileSetupView: View {
     @EnvironmentObject private var authentication: AuthenticationStore
     @Environment(\.dismiss) private var dismiss
     let onSaved: () -> Void
-    @State private var displayName = ""
     @State private var username = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
 
     private var isValid: Bool {
-        !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && UsernamePolicy.isValid(username)
+        UsernamePolicy.isValid(username)
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Display name", text: $displayName)
-                        .textContentType(.name)
                     TextField("Username", text: $username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -815,7 +817,6 @@ struct ProfileSetupView: View {
         .onAppear {
             let email = authentication.session?.user.email
             username = UsernamePolicy.suggestion(from: email)
-            displayName = email?.split(separator: "@").first.map { String($0).replacingOccurrences(of: ".", with: " ").capitalized } ?? ""
         }
     }
 
@@ -824,7 +825,7 @@ struct ProfileSetupView: View {
             isSaving = true
             errorMessage = nil
             do {
-                try await feedStore.saveProfile(displayName: displayName, username: username)
+                try await feedStore.saveProfile(username: username)
                 onSaved()
             } catch {
                 errorMessage = error.localizedDescription

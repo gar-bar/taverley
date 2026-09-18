@@ -25,6 +25,7 @@ struct AuthenticationGate: View {
     @EnvironmentObject private var authentication: AuthenticationStore
     @EnvironmentObject private var store: MealStore
     @EnvironmentObject private var feedStore: FeedStore
+    @EnvironmentObject private var householdStore: HouseholdStore
 
     var body: some View {
         Group {
@@ -35,18 +36,20 @@ struct AuthenticationGate: View {
                 }
             } else if authentication.isSkippingForNow {
                 RootView()
-                    .onAppear { feedStore.deactivateAccount() }
+                    .onAppear { feedStore.deactivateAccount(); householdStore.deactivateAccount() }
             } else if let session = authentication.session, let dataClient = authentication.dataClient {
                 RootView()
                     .task(id: session.accessToken) {
                         await store.activateAccount(session, client: dataClient)
                         await feedStore.activateAccount(session, client: dataClient)
+                        await householdStore.activateAccount(session, client: dataClient)
                     }
             } else {
                 EmailCodeSignInView()
                     .onAppear {
                         store.deactivateAccount()
                         feedStore.deactivateAccount()
+                        householdStore.deactivateAccount()
                     }
             }
         }
@@ -56,38 +59,51 @@ struct AuthenticationGate: View {
 
 struct EmailCodeSignInView: View {
     @EnvironmentObject private var authentication: AuthenticationStore
+    @State private var mode: AuthEntryMode = .signIn
+    @State private var username = ""
     @State private var email = ""
     @State private var password = ""
+    @State private var passwordConfirmation = ""
+    @State private var showsPassword = false
     @State private var isSubmitting = false
     @State private var errorMessage: String?
+    @State private var usernameStatus: UsernameAvailability = .idle
 
     var body: some View {
         ZStack {
             AppTheme.background.ignoresSafeArea()
-
-            ScrollView {
+            if authentication.pendingKind != nil {
+                AuthCodeVerificationView()
+            } else {
+                ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    Spacer(minLength: 100)
+                    Spacer(minLength: 64)
 
                     Image(systemName: "fork.knife.circle.fill")
                         .font(.system(size: 52))
                         .foregroundStyle(AppTheme.primary)
 
-                    Text("Welcome to Taverley")
+                    Text(mode.title)
                         .font(.custom("Plus Jakarta Sans", size: 31).weight(.bold))
                         .foregroundStyle(AppTheme.text)
                         .padding(.top, 24)
 
-                    Text("Sign in to keep your recipes and meal plans private, safe, and available on every device.")
+                    Text(mode.detail)
                         .font(.custom("Inter", size: 16))
                         .foregroundStyle(AppTheme.label)
                         .lineSpacing(3)
                         .padding(.top, 10)
 
-                    Text("Email address")
-                        .font(.custom("Inter", size: 15).weight(.medium))
-                        .foregroundStyle(AppTheme.text)
-                        .padding(.top, 30)
+                    if mode == .createAccount {
+                        fieldLabel("Username", top: 28)
+                        TextField("your_username", text: $username)
+                            .figmaInput().textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .onChange(of: username) { username = UsernamePolicy.normalize(username) }
+                            .task(id: username) { await checkUsername() }
+                        usernameAvailabilityLabel
+                    }
+
+                    fieldLabel("Email address", top: mode == .createAccount ? 16 : 30)
 
                     TextField("you@example.com", text: $email)
                         .figmaInput()
@@ -96,20 +112,20 @@ struct EmailCodeSignInView: View {
                         .textContentType(.emailAddress)
                         .padding(.top, 8)
 
-                    Text("Password")
-                        .font(.custom("Inter", size: 15).weight(.medium))
-                        .foregroundStyle(AppTheme.text)
-                        .padding(.top, 18)
-
-                    SecureField("Password", text: $password)
-                        .figmaInput()
-                        .textContentType(.password)
+                    fieldLabel("Password", top: 18)
+                    passwordField("Password", text: $password, contentType: mode == .createAccount ? .newPassword : .password)
                         .padding(.top, 8)
 
-                    Button(action: signIn) {
-                        buttonLabel("Sign in")
+                    if mode == .createAccount {
+                        fieldLabel("Confirm password", top: 18)
+                        passwordField("Confirm password", text: $passwordConfirmation, contentType: .newPassword)
+                            .padding(.top, 8)
+                        PasswordRequirementsView(password: password, confirmation: passwordConfirmation)
+                            .padding(.top, 12)
                     }
-                    .disabled(!isValidEmail || password.isEmpty || isSubmitting)
+
+                    Button(action: submit) { buttonLabel(mode.buttonTitle) }
+                    .disabled(!canSubmit || isSubmitting)
                     .padding(.top, 14)
 
                     if let errorMessage {
@@ -119,30 +135,64 @@ struct EmailCodeSignInView: View {
                             .padding(.top, 16)
                     }
 
-                    Button("Skip for now") {
-                        authentication.isSkippingForNow = true
+                    if mode == .signIn {
+                        Button("Forgot password?") { mode = .recovery; resetMessages() }
+                            .authSecondaryButton()
                     }
-                    .font(.custom("Inter", size: 16).weight(.semibold))
-                    .foregroundStyle(AppTheme.primary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 22)
 
-                    Text("Test accounts can be created manually in Supabase. Password reset and Apple sign-in will be added later.")
-                        .font(.custom("Inter", size: 13))
-                        .foregroundStyle(AppTheme.label)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 36)
+                    Button(mode.switchTitle) {
+                        mode = mode.switchMode
+                        password = ""; passwordConfirmation = ""; resetMessages()
+                    }
+                    .authSecondaryButton()
+
+                    #if DEBUG
+                    Button("Skip for now") { authentication.isSkippingForNow = true }
+                        .authSecondaryButton()
+                    #endif
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 30)
+                }
             }
         }
     }
 
-    private var isValidEmail: Bool {
+    private var canSubmit: Bool {
         let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.contains("@") && trimmed.contains(".")
+        let validEmail = trimmed.contains("@") && trimmed.split(separator: "@").last?.contains(".") == true
+        switch mode {
+        case .signIn: return validEmail && !password.isEmpty
+        case .recovery: return validEmail
+        case .createAccount:
+            return validEmail && UsernamePolicy.isValid(username) && usernameStatus == .available
+                && PasswordPolicy.isValid(password) && password == passwordConfirmation
+        }
+    }
+
+    private func fieldLabel(_ title: String, top: CGFloat) -> some View {
+        Text(title).font(.custom("Inter", size: 15).weight(.medium)).foregroundStyle(AppTheme.text).padding(.top, top)
+    }
+
+    private func passwordField(_ title: String, text: Binding<String>, contentType: UITextContentType) -> some View {
+        HStack {
+            Group {
+                if showsPassword { TextField(title, text: text) } else { SecureField(title, text: text) }
+            }
+            .textContentType(contentType)
+            Button { showsPassword.toggle() } label: { Image(systemName: showsPassword ? "eye.slash" : "eye") }
+                .accessibilityLabel(showsPassword ? "Hide passwords" : "Show passwords")
+        }.figmaInput()
+    }
+
+    @ViewBuilder private var usernameAvailabilityLabel: some View {
+        switch usernameStatus {
+        case .checking: Text("Checking availability…").foregroundStyle(AppTheme.label)
+        case .available: Label("Username available", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+        case .taken: Label("Username already taken", systemImage: "xmark.circle.fill").foregroundStyle(.red)
+        case .failed: Text("Availability could not be checked.").foregroundStyle(.red)
+        case .idle: Text("3–30 lowercase letters, numbers, periods, or underscores.").foregroundStyle(AppTheme.label)
+        }
     }
 
     private func buttonLabel(_ title: String) -> some View {
@@ -159,13 +209,17 @@ struct EmailCodeSignInView: View {
         .opacity(isSubmitting ? 0.72 : 1)
     }
 
-    private func signIn() {
+    private func submit() {
         Task {
             isSubmitting = true
             errorMessage = nil
             do {
                 email = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                try await authentication.signIn(email: email, password: password)
+                switch mode {
+                case .signIn: try await authentication.signIn(email: email, password: password)
+                case .createAccount: try await authentication.signUp(username: username, email: email, password: password, confirmation: passwordConfirmation)
+                case .recovery: try await authentication.requestPasswordRecovery(email: email)
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -173,16 +227,136 @@ struct EmailCodeSignInView: View {
         }
     }
 
+    private func checkUsername() async {
+        guard mode == .createAccount, UsernamePolicy.isValid(username) else { usernameStatus = .idle; return }
+        usernameStatus = .checking
+        try? await Task.sleep(for: .milliseconds(450))
+        guard !Task.isCancelled else { return }
+        do { usernameStatus = try await authentication.checkUsernameAvailability(username) ? .available : .taken }
+        catch { usernameStatus = .failed }
+    }
+
+    private func resetMessages() { errorMessage = nil; usernameStatus = .idle }
+}
+
+private enum AuthEntryMode {
+    case signIn, createAccount, recovery
+    var title: String { switch self { case .signIn: "Welcome to Taverley"; case .createAccount: "Create your account"; case .recovery: "Reset your password" } }
+    var detail: String { switch self { case .signIn: "Sign in to keep your recipes available on every device."; case .createAccount: "Choose your unique identity and secure your recipes."; case .recovery: "We’ll email you a six-digit recovery code." } }
+    var buttonTitle: String { switch self { case .signIn: "Sign in"; case .createAccount: "Create account"; case .recovery: "Send recovery code" } }
+    var switchTitle: String { switch self { case .signIn: "Create an account"; case .createAccount, .recovery: "Back to sign in" } }
+    var switchMode: Self { self == .signIn ? .createAccount : .signIn }
+}
+
+private enum UsernameAvailability { case idle, checking, available, taken, failed }
+
+private struct PasswordRequirementsView: View {
+    let password: String
+    let confirmation: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            requirement("12 or more characters", met: PasswordPolicy.hasMinimumLength(password))
+            requirement("At least one number", met: PasswordPolicy.hasNumber(password))
+            requirement("At least one symbol", met: PasswordPolicy.hasSymbol(password))
+            requirement("Passwords match", met: !confirmation.isEmpty && password == confirmation)
+        }
+    }
+    private func requirement(_ text: String, met: Bool) -> some View {
+        Label(text, systemImage: met ? "checkmark.circle.fill" : "circle")
+            .font(.custom("Inter", size: 13)).foregroundStyle(met ? .green : AppTheme.label)
+    }
+}
+
+private struct AuthCodeVerificationView: View {
+    @EnvironmentObject private var authentication: AuthenticationStore
+    @State private var code = ""
+    @State private var replacementUsername = ""
+    @State private var needsUsername = false
+    @State private var recoveryVerified = false
+    @State private var newPassword = ""
+    @State private var confirmation = ""
+    @State private var isSubmitting = false
+    @State private var errorMessage: String?
+    @State private var resendSeconds = 60
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Spacer(minLength: 70)
+                Image(systemName: recoveryVerified ? "lock.rotation" : "envelope.badge")
+                    .font(.system(size: 48)).foregroundStyle(AppTheme.primary)
+                Text(recoveryVerified ? "Choose a new password" : "Check your email")
+                    .font(.custom("Plus Jakarta Sans", size: 31).weight(.bold)).foregroundStyle(AppTheme.text)
+
+                if recoveryVerified {
+                    SecureField("New password", text: $newPassword).figmaInput().textContentType(.newPassword)
+                    SecureField("Confirm new password", text: $confirmation).figmaInput().textContentType(.newPassword)
+                    PasswordRequirementsView(password: newPassword, confirmation: confirmation)
+                    primaryButton("Save new password", disabled: !PasswordPolicy.isValid(newPassword) || newPassword != confirmation) { finishRecovery() }
+                } else if needsUsername {
+                    Text("Your original username was just claimed. Choose another to finish creating your account.").foregroundStyle(AppTheme.label)
+                    TextField("Username", text: $replacementUsername).figmaInput().textInputAutocapitalization(.never).autocorrectionDisabled()
+                    primaryButton("Finish account", disabled: !UsernamePolicy.isValid(replacementUsername)) { claimUsername() }
+                } else {
+                    Text("Enter the six-digit code sent to \(maskedEmail).")
+                        .font(.custom("Inter", size: 16)).foregroundStyle(AppTheme.label)
+                    TextField("000000", text: $code)
+                        .figmaInput().keyboardType(.numberPad).textContentType(.oneTimeCode)
+                        .onChange(of: code) { code = String(code.filter(\.isNumber).prefix(6)) }
+                    primaryButton("Verify code", disabled: code.count != 6) { verify() }
+                    Button(resendSeconds > 0 ? "Resend in \(resendSeconds)s" : "Resend code") { resend() }
+                        .disabled(resendSeconds > 0).authSecondaryButton()
+                    Button("Use a different email") { authentication.cancelPendingFlow() }.authSecondaryButton()
+                }
+
+                if let errorMessage { Text(errorMessage).font(.custom("Inter", size: 14)).foregroundStyle(.red) }
+            }
+            .padding(.horizontal, 24).padding(.bottom, 30)
+        }
+        .task(id: resendSeconds) {
+            guard resendSeconds > 0 else { return }
+            try? await Task.sleep(for: .seconds(1))
+            if !Task.isCancelled { resendSeconds -= 1 }
+        }
+    }
+
+    private var maskedEmail: String {
+        guard let email = authentication.pendingEmail, let at = email.firstIndex(of: "@") else { return "your email" }
+        let name = email[..<at]
+        return "\(name.prefix(1))•••\(email[at...])"
+    }
+
+    private func primaryButton(_ title: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) { HStack { if isSubmitting { ProgressView().tint(.black) }; Text(title) }.frame(maxWidth: .infinity).frame(height: 48) }
+            .font(.custom("Inter", size: 16).weight(.bold)).foregroundStyle(.black).background(AppTheme.primary)
+            .clipShape(RoundedRectangle(cornerRadius: 14)).disabled(disabled || isSubmitting)
+    }
+
+    private func verify() { run { try await authentication.verifyPendingCode(code); if authentication.pendingKind == .recovery { recoveryVerified = true } } }
+    private func finishRecovery() { run { try await authentication.finishPasswordRecovery(password: newPassword, confirmation: confirmation) } }
+    private func claimUsername() { run { do { try await authentication.claimPendingUsername(replacementUsername) } catch AuthenticationError.usernameTaken { needsUsername = true; throw AuthenticationError.usernameTaken } } }
+    private func resend() { run { try await authentication.resendPendingCode(); resendSeconds = 60 } }
+    private func run(_ operation: @escaping () async throws -> Void) {
+        Task { isSubmitting = true; errorMessage = nil; do { try await operation() } catch AuthenticationError.usernameTaken { needsUsername = true; errorMessage = AuthenticationError.usernameTaken.localizedDescription } catch { errorMessage = error.localizedDescription }; isSubmitting = false }
+    }
+}
+
+private extension View {
+    func authSecondaryButton() -> some View {
+        font(.custom("Inter", size: 16).weight(.semibold)).foregroundStyle(AppTheme.primary).frame(maxWidth: .infinity).padding(.top, 10)
+    }
 }
 
 struct ProfileView: View {
     @EnvironmentObject private var store: MealStore
     @EnvironmentObject private var feedStore: FeedStore
+    @EnvironmentObject private var householdStore: HouseholdStore
     @EnvironmentObject private var authentication: AuthenticationStore
     let onBack: () -> Void
     @State private var avatarItem: PhotosPickerItem?
     @AppStorage("profileAvatarImageData") private var avatarImageData: Data?
     @State private var showAccountOptions = false
+    @State private var showDeleteAccount = false
     @State private var selectedPostID: UUID?
 
     private var featuredRecipes: [Recipe] {
@@ -212,13 +386,26 @@ struct ProfileView: View {
 
                         Spacer()
 
-                        Button { showAccountOptions = true } label: {
-                            Image(systemName: "gearshape")
-                                .font(.title2.weight(.medium))
-                                .foregroundStyle(AppTheme.text)
-                                .frame(width: 44, height: 44)
+                        HStack(spacing: 2) {
+                            NavigationLink {
+                                MyFavouritesView()
+                            } label: {
+                                Image(systemName: "star")
+                                    .font(.title2.weight(.medium))
+                                    .foregroundStyle(AppTheme.text)
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("My favourites")
+
+                            Button { showAccountOptions = true } label: {
+                                Image(systemName: "gearshape")
+                                    .font(.title2.weight(.medium))
+                                    .foregroundStyle(AppTheme.text)
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.top, 10)
                     .padding(.horizontal, 20)
@@ -245,14 +432,9 @@ struct ProfileView: View {
 
                         VStack(alignment: .leading, spacing: 18) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(feedStore.currentProfile?.displayName ?? "Garnet")
+                                Text(feedStore.currentProfile?.username ?? "Garnet")
                                     .font(.custom("Plus Jakarta Sans", size: 34).weight(.bold))
                                     .foregroundStyle(AppTheme.text)
-                                if let username = feedStore.currentProfile?.username {
-                                    Text("@\(username)")
-                                        .font(.custom("Inter", size: 14))
-                                        .foregroundStyle(AppTheme.label)
-                                }
                             }
 
                             HStack(spacing: 34) {
@@ -263,6 +445,10 @@ struct ProfileView: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 26)
+
+                    HouseholdProfileCard()
+                        .padding(.horizontal, 24)
+                        .padding(.top, 28)
 
                     NavigationLink {
                         ProfileRecipesView()
@@ -283,7 +469,7 @@ struct ProfileView: View {
                     .accessibilityLabel("Show all \(store.recipes.count) recipes")
                     .foregroundStyle(AppTheme.text)
                     .padding(.horizontal, 24)
-                    .padding(.top, 44)
+                    .padding(.top, 28)
 
                     if featuredRecipes.isEmpty {
                         Text("Your recipes will appear here.")
@@ -359,12 +545,12 @@ struct ProfileView: View {
         }
         }
         .confirmationDialog("Account", isPresented: $showAccountOptions, titleVisibility: .visible) {
-            Button("Sign out", role: .destructive) {
-                authentication.signOut()
-            }
+            Button("Sign out") { authentication.signOut() }
+            Button("Delete account", role: .destructive) { showDeleteAccount = true }
         } message: {
-            Text("You can sign in with a different test account after signing out.")
+            Text("Manage your Taverley account.")
         }
+        .sheet(isPresented: $showDeleteAccount) { DeleteAccountView() }
         .task(id: avatarItem) {
             guard let avatarItem else { return }
             avatarImageData = try? await avatarItem.loadTransferable(type: Data.self)
@@ -377,6 +563,272 @@ struct ProfileView: View {
         } else {
             Image("FigmaRecipe3").resizable().scaledToFill()
         }
+    }
+}
+
+private struct DeleteAccountView: View {
+    @EnvironmentObject private var authentication: AuthenticationStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var password = ""
+    @State private var confirmation = ""
+    @State private var isDeleting = false
+    @State private var showFinalConfirmation = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("This permanently deletes your profile, recipes, meal plans, calendar data, posts, comments, favourites, and uploaded photos.")
+                    Text("If you own a household, ownership transfers to its longest-standing remaining member. A household with no other members is deleted.")
+                } header: { Text("Permanent deletion") }
+
+                Section("Confirm your identity") {
+                    SecureField("Current password", text: $password).textContentType(.password)
+                    TextField("Type DELETE", text: $confirmation).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                }
+
+                if let errorMessage { Section { Text(errorMessage).foregroundStyle(.red) } }
+
+                Section {
+                    Button("Delete account", role: .destructive) { showFinalConfirmation = true }
+                        .disabled(password.isEmpty || confirmation != "DELETE" || isDeleting)
+                }
+            }
+            .scrollContentBackground(.hidden).background(AppTheme.background)
+            .navigationTitle("Delete Account").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(isDeleting) } }
+            .alert("Permanently delete your account?", isPresented: $showFinalConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete forever", role: .destructive) { deleteAccount() }
+            } message: { Text("This cannot be undone.") }
+            .interactiveDismissDisabled(isDeleting)
+        }
+    }
+
+    private func deleteAccount() {
+        Task {
+            isDeleting = true; errorMessage = nil
+            do { try await authentication.deleteAccount(password: password); dismiss() }
+            catch { errorMessage = error.localizedDescription }
+            isDeleting = false
+        }
+    }
+}
+
+private struct MyFavouritesView: View {
+    @EnvironmentObject private var feedStore: FeedStore
+    @State private var selectedKind: FavouriteKind = .recipes
+    @State private var selectedPost: FeedItem?
+
+    var body: some View {
+        ZStack {
+            AppTheme.background.ignoresSafeArea()
+
+            VStack(spacing: 14) {
+                favouriteFilter
+                    .padding(.horizontal, 16)
+
+                switch selectedKind {
+                case .recipes:
+                    favouriteRecipes
+                case .posts:
+                    favouritePosts
+                }
+            }
+            .padding(.top, 8)
+        }
+        .navigationTitle("My Favourites")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(AppTheme.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .navigationDestination(item: $selectedPost) { post in
+            PostDetailView(item: post)
+        }
+        .onAppear {
+            feedStore.invalidateFavouritePages()
+            Task { await feedStore.loadFavouritePage(kind: selectedKind, reset: true) }
+        }
+        .onChange(of: selectedKind) { _ in
+            loadSelectedKindIfNeeded()
+        }
+    }
+
+    private var favouriteFilter: some View {
+        HStack(spacing: 4) {
+            ForEach(FavouriteKind.allCases) { kind in
+                Button {
+                    selectedKind = kind
+                } label: {
+                    Text(kind.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(selectedKind == kind ? .black : AppTheme.label)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                        .background(selectedKind == kind ? AppTheme.primary : Color.clear)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedKind == kind ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(AppTheme.input)
+        .clipShape(Capsule())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Favourite type")
+    }
+
+    @ViewBuilder
+    private var favouriteRecipes: some View {
+        let state = feedStore.favouriteRecipeState
+        if state.items.isEmpty {
+            favouriteEmptyState(
+                title: "No favourite recipes yet",
+                systemImage: "star",
+                isLoading: state.isLoading,
+                errorMessage: state.errorMessage,
+                retry: { Task { await feedStore.loadFavouritePage(kind: .recipes, reset: true) } }
+            )
+        } else {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ForEach(state.items) { recipe in
+                        NavigationLink {
+                            RecipeDetailView(recipe: recipe)
+                        } label: {
+                            RecipeCard(recipe: recipe)
+                        }
+                        .buttonStyle(.plain)
+                        .onAppear {
+                            if recipe.id == state.items.last?.id {
+                                Task { await feedStore.loadFavouritePage(kind: .recipes) }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                paginationFooter(
+                    isLoading: state.isLoading,
+                    hasMore: state.hasMore,
+                    errorMessage: state.errorMessage,
+                    retry: { Task { await feedStore.loadFavouritePage(kind: .recipes) } }
+                )
+            }
+            .scrollIndicators(.hidden)
+            .refreshable { await feedStore.loadFavouritePage(kind: .recipes, reset: true) }
+        }
+    }
+
+    @ViewBuilder
+    private var favouritePosts: some View {
+        let state = feedStore.favouritePostState
+        if state.items.isEmpty {
+            favouriteEmptyState(
+                title: "No favourite posts yet",
+                systemImage: "star",
+                isLoading: state.isLoading,
+                errorMessage: state.errorMessage,
+                retry: { Task { await feedStore.loadFavouritePage(kind: .posts, reset: true) } }
+            )
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(state.items) { post in
+                        FeedPostCard(item: post) {
+                            selectedPost = post
+                        }
+                        .onAppear {
+                            if post.id == state.items.last?.id {
+                                Task { await feedStore.loadFavouritePage(kind: .posts) }
+                            }
+                        }
+
+                        Divider()
+                            .overlay(AppTheme.border)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                paginationFooter(
+                    isLoading: state.isLoading,
+                    hasMore: state.hasMore,
+                    errorMessage: state.errorMessage,
+                    retry: { Task { await feedStore.loadFavouritePage(kind: .posts) } }
+                )
+            }
+            .scrollIndicators(.hidden)
+            .refreshable { await feedStore.loadFavouritePage(kind: .posts, reset: true) }
+        }
+    }
+
+    private func favouriteEmptyState(
+        title: String,
+        systemImage: String,
+        isLoading: Bool,
+        errorMessage: String?,
+        retry: @escaping () -> Void
+    ) -> some View {
+        Group {
+            if isLoading {
+                Spacer()
+                ProgressView("Loading favourites…")
+                    .tint(AppTheme.primary)
+                    .foregroundStyle(AppTheme.label)
+                Spacer()
+            } else if let errorMessage {
+                ContentUnavailableView {
+                    Label("Couldn’t load favourites", systemImage: "wifi.exclamationmark")
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Try Again", action: retry)
+                        .buttonStyle(.borderedProminent)
+                        .tint(AppTheme.primary)
+                }
+            } else {
+                ContentUnavailableView(
+                    title,
+                    systemImage: systemImage,
+                    description: Text("Items you star will appear here.")
+                )
+            }
+        }
+    }
+
+    private func paginationFooter(
+        isLoading: Bool,
+        hasMore: Bool,
+        errorMessage: String?,
+        retry: @escaping () -> Void
+    ) -> some View {
+        Group {
+            if isLoading {
+                ProgressView()
+                    .tint(AppTheme.primary)
+                    .padding(.vertical, 24)
+            } else if let errorMessage {
+                Button("Retry loading more", action: retry)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.primary)
+                    .padding(.vertical, 24)
+            } else if !hasMore {
+                Text("All favourites loaded")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.label)
+                    .padding(.vertical, 24)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func loadSelectedKindIfNeeded() {
+        let shouldLoad = switch selectedKind {
+        case .recipes: !feedStore.favouriteRecipeState.hasLoaded
+        case .posts: !feedStore.favouritePostState.hasLoaded
+        }
+        guard shouldLoad else { return }
+        Task { await feedStore.loadFavouritePage(kind: selectedKind, reset: true) }
     }
 }
 
@@ -647,14 +1099,14 @@ struct RecipeCard: View {
 }
 
 struct RecipeDetailView: View {
-    @EnvironmentObject private var store: MealStore; @EnvironmentObject private var feedStore: FeedStore; @Environment(\.dismiss) private var dismiss; let recipe: Recipe; @State private var scale = 1.0; @State private var ingredientsOpen = true; @State private var stepsOpen = false; @State private var nutritionOpen = false
+    @EnvironmentObject private var store: MealStore; @EnvironmentObject private var feedStore: FeedStore; @EnvironmentObject private var householdStore: HouseholdStore; @Environment(\.dismiss) private var dismiss; let recipe: Recipe; var allowsHouseholdSharing = true; @State private var scale = 1.0; @State private var ingredientsOpen = true; @State private var stepsOpen = false; @State private var nutritionOpen = false; @State private var shareMessage: String?
     var body: some View { ZStack { AppTheme.background.ignoresSafeArea(); ScrollView { VStack(spacing: 0) {
         ZStack(alignment: .top) {
             Group {
                 if let data = recipe.imageData, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() }
                 else { Image("FigmaHero").resizable().scaledToFill() }
             }.frame(height: 180).clipped().overlay(AppTheme.background.opacity(0.28))
-            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text).frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle()) }; Spacer(); Button { Task { try? await feedStore.toggleRecipeFavourite(recipeID: recipe.id) } } label: { Image(systemName: feedStore.favouritedRecipeIDs.contains(recipe.id) ? "star.fill" : "star").foregroundStyle(feedStore.favouritedRecipeIDs.contains(recipe.id) ? AppTheme.primary : AppTheme.text) }.accessibilityLabel(feedStore.favouritedRecipeIDs.contains(recipe.id) ? "Remove recipe from favourites" : "Favourite recipe"); Button { } label: { Image(systemName: "square.and.arrow.up") } }.font(.body.weight(.semibold)).foregroundStyle(AppTheme.text).padding(.horizontal, 16).padding(.top, 14)
+            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text).frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle()) }; Spacer(); if allowsHouseholdSharing { Button { Task { try? await feedStore.toggleRecipeFavourite(recipeID: recipe.id) } } label: { Image(systemName: feedStore.favouritedRecipeIDs.contains(recipe.id) ? "star.fill" : "star").foregroundStyle(feedStore.favouritedRecipeIDs.contains(recipe.id) ? AppTheme.primary : AppTheme.text) }.accessibilityLabel(feedStore.favouritedRecipeIDs.contains(recipe.id) ? "Remove recipe from favourites" : "Favourite recipe"); Button { shareRecipe() } label: { Image(systemName: "house.badge.plus") }.accessibilityLabel("Share recipe to household") } }.font(.body.weight(.semibold)).foregroundStyle(AppTheme.text).padding(.horizontal, 16).padding(.top, 14)
         }
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) { Circle().fill(AppTheme.primary.opacity(0.35)).frame(width: 25, height: 25).overlay(Image(systemName: "person.fill").font(.caption)); VStack(alignment: .leading, spacing: 0) { Text(recipe.author).font(.custom("Inter", size: 12).weight(.medium)); Text("@\(recipe.author.lowercased())").font(.custom("Inter", size: 10)).foregroundStyle(AppTheme.label) }; Spacer(); VStack(alignment: .trailing, spacing: 2) { Label("4.8 (30)", systemImage: "star.fill").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.primary); Text("30 Minutes").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label) } }
@@ -664,7 +1116,12 @@ struct RecipeDetailView: View {
             Accordion(title: "Instructions", isOpen: $stepsOpen) { ForEach(Array(recipe.steps.enumerated()), id: \.element.id) { index, step in Text("\(index + 1). \(step.text)").font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 4) } }
             Accordion(title: "Nutrition Facts", isOpen: $nutritionOpen) { ForEach(recipe.nutrition) { fact in HStack { Text(fact.name); Spacer(); Text("\(fact.amount.formatted()) \(fact.unit)") }.font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.text) } }
         }.padding(16).padding(.bottom, 28).background(AppTheme.background).clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12)).offset(y: -15)
-    } }.scrollIndicators(.hidden) }.toolbar(.hidden, for: .navigationBar) }
+    } }.scrollIndicators(.hidden) }.toolbar(.hidden, for: .navigationBar).alert("Household", isPresented: Binding(get: { shareMessage != nil }, set: { if !$0 { shareMessage = nil } })) { Button("OK", role: .cancel) {} } message: { Text(shareMessage ?? "") } }
+
+    private func shareRecipe() {
+        guard householdStore.household != nil else { shareMessage = "Create or join a household before sharing recipes."; return }
+        Task { do { try await householdStore.share(recipe: recipe); shareMessage = "Recipe shared with \(householdStore.household?.name ?? "your household")." } catch { shareMessage = error.localizedDescription } }
+    }
 }
 
 struct Accordion<Content: View>: View { let title: String; @Binding var isOpen: Bool; @ViewBuilder let content: Content; var body: some View { SurfaceCard { VStack(alignment: .leading, spacing: 12) { Button { withAnimation { isOpen.toggle() } } label: { HStack { Text(title).font(.title3.weight(.semibold)); Spacer(); Image(systemName: isOpen ? "chevron.up" : "chevron.down") }.foregroundStyle(AppTheme.text) }; if isOpen { content } } } } }
@@ -747,7 +1204,7 @@ struct RecipeEditor: View {
     }
 }
 
-private struct IngredientInputRow: View {
+struct IngredientInputRow: View {
     @Binding var ingredient: Ingredient
 
     var body: some View {
@@ -789,16 +1246,16 @@ struct PlanCard: View {
     }
 }
 
-private struct PlanRecipeSlot: Identifiable {
+struct PlanRecipeSlot: Identifiable {
     let week: Int; let weekday: Int; let mealType: MealType
     var id: String { "\(week)-\(weekday)-\(mealType.rawValue)" }
 }
 
 struct MealPlanEditor: View {
-    @EnvironmentObject private var store: MealStore; @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: MealStore; @EnvironmentObject private var householdStore: HouseholdStore; @Environment(\.dismiss) private var dismiss
     let existing: MealPlan?
     @State private var name = ""; @State private var tagText = ""; @State private var weekCount = 1; @State private var meals: [PlanMeal] = []; @State private var expandedWeek = 1
-    @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?; @State private var recipeSlot: PlanRecipeSlot?
+    @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?; @State private var recipeSlot: PlanRecipeSlot?; @State private var confirmHouseholdShare = false; @State private var shareMessage: String?
     init(plan: MealPlan?) { existing = plan; _name = State(initialValue: plan?.name ?? ""); _tagText = State(initialValue: plan?.tags.joined(separator: ", ") ?? ""); _weekCount = State(initialValue: plan?.weekCount ?? 1); _meals = State(initialValue: plan?.meals ?? []); _imageData = State(initialValue: plan?.imageData) }
     var body: some View {
         NavigationStack {
@@ -828,6 +1285,10 @@ struct MealPlanEditor: View {
             guard let photoItem else { return }
             imageData = try? await photoItem.loadTransferable(type: Data.self)
         }
+        .confirmationDialog("Share this plan with your household?", isPresented: $confirmHouseholdShare) {
+            Button("Share plan and \(Set(meals.map(\.recipeID)).count) recipe\(Set(meals.map(\.recipeID)).count == 1 ? "" : "s")") { sharePlan() }
+        } message: { Text("This creates collaborative household copies. Your personal plan and recipes stay private and unchanged.") }
+        .alert("Household", isPresented: Binding(get: { shareMessage != nil }, set: { if !$0 { shareMessage = nil } })) { Button("OK", role: .cancel) {} } message: { Text(shareMessage ?? "") }
         .toolbar(.hidden, for: .navigationBar)
     }
 
@@ -843,6 +1304,9 @@ struct MealPlanEditor: View {
                 }.clipShape(RoundedRectangle(cornerRadius: 14))
             }.buttonStyle(.plain)
             Button { dismiss() } label: { Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text).frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle()) }.padding(14)
+            if existing != nil {
+                HStack { Spacer(); Button { if householdStore.household == nil { shareMessage = "Create or join a household before sharing meal plans." } else { confirmHouseholdShare = true } } label: { Image(systemName: "house.badge.plus").foregroundStyle(AppTheme.text).frame(width: 36, height: 36).background(AppTheme.background.opacity(0.94)).clipShape(Circle()) }.accessibilityLabel("Share meal plan to household") }.padding(14)
+            }
         }
     }
 
@@ -899,6 +1363,7 @@ struct MealPlanEditor: View {
     private func fieldLabel(_ title: String) -> some View { Text(title).font(.custom("Inter", size: 12).weight(.semibold)).foregroundStyle(AppTheme.label) }
     private func setRecipe(_ recipeID: UUID, for slot: PlanRecipeSlot) { meals.removeAll { $0.week == slot.week && $0.weekday == slot.weekday && $0.mealType == slot.mealType }; meals.append(PlanMeal(week: slot.week, weekday: slot.weekday, mealType: slot.mealType, recipeID: recipeID)) }
     private func savePlan() { guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; store.save(plan: MealPlan(id: existing?.id ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), tags: tagText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }, weekCount: weekCount, meals: meals.filter { $0.week <= weekCount }, imageData: imageData)); dismiss() }
+    private func sharePlan() { guard let existing else { return }; Task { do { try await householdStore.share(plan: existing); shareMessage = "Meal plan shared with \(householdStore.household?.name ?? "your household")." } catch { shareMessage = error.localizedDescription } } }
 }
 
 private struct PlanRecipePickerSheet: View {
@@ -933,13 +1398,52 @@ struct AddPlanMealButton: View {
     var body: some View { Menu { Picker("Day", selection: $weekday) { ForEach(1...7, id: \.self) { Text(weekdayName($0)).tag($0) } }; Picker("Meal type", selection: $type) { ForEach(MealType.allCases) { Text($0.rawValue).tag($0) } }; Picker("Recipe", selection: $recipeID) { Text("Choose recipe").tag(UUID?.none); ForEach(store.recipes) { Text($0.title).tag(Optional($0.id)) } }; Button("Add Meal") { if let recipeID { add(PlanMeal(week: week, weekday: weekday, mealType: type, recipeID: recipeID)) } } } label: { Label("Add Meal", systemImage: "plus") } }
 }
 
+struct CalendarView: View {
+    @EnvironmentObject private var householdStore: HouseholdStore
+    @State private var scope: CalendarScope = .personal
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                if householdStore.household != nil {
+                    Picker("Calendar", selection: $scope) {
+                        ForEach(CalendarScope.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+                    .background(AppTheme.background)
+                }
+                MealCalendarContent(
+                    scope: scope == .household && householdStore.household != nil ? .household : .personal,
+                    hidesNavigationBar: true
+                )
+            }
+            .background(AppTheme.background)
+        }
+        .onChange(of: householdStore.household?.id) { householdID in if householdID == nil { scope = .personal } }
+    }
+}
+
 private enum CalendarDisplayMode: String, CaseIterable, Identifiable {
     case week = "Week", month = "Month"
     var id: Self { self }
 }
 
-struct CalendarView: View {
+private struct CalendarDisplayMeal: Identifiable {
+    let id: UUID
+    let date: Date
+    let mealType: MealType
+    let recipeID: UUID
+    let householdMeal: HouseholdCalendarMeal?
+}
+
+struct MealCalendarContent: View {
     @EnvironmentObject private var store: MealStore
+    @EnvironmentObject private var householdStore: HouseholdStore
+    let scope: CalendarScope
+    let hidesNavigationBar: Bool
     @State private var selectedDate = Date()
     @State private var displayMode: CalendarDisplayMode = .week
     @State private var showMeal = false
@@ -953,8 +1457,7 @@ struct CalendarView: View {
     private let calendar = Calendar.current
 
     var body: some View {
-        NavigationStack {
-            ZStack(alignment: .bottomTrailing) {
+        ZStack(alignment: .bottomTrailing) {
                 AppTheme.background.ignoresSafeArea()
                 Group {
                     if displayMode == .week {
@@ -991,25 +1494,38 @@ struct CalendarView: View {
                 }
                 actionButtons.padding(.trailing, 20).padding(.bottom, 90)
             }
-            .navigationBarHidden(true)
+            .toolbar(hidesNavigationBar ? .hidden : .visible, for: .navigationBar)
             .onAppear { weekBarAnchor = selectedDate; loadWeekFeed(from: selectedDate) }
             .sheet(isPresented: $showMeal) {
-                ScheduleMealSheet(date: selectedDate, initialType: mealTypeToAdd)
-                    .presentationDetents([.medium, .large], selection: $mealSheetDetent)
-                    .presentationDragIndicator(.visible)
-                    .presentationCornerRadius(24)
+                Group {
+                    if scope == .household {
+                        HouseholdScheduleMealSheet(date: selectedDate, initialType: mealTypeToAdd)
+                    } else {
+                        ScheduleMealSheet(date: selectedDate, initialType: mealTypeToAdd)
+                    }
+                }
+                .presentationDetents([.medium, .large], selection: $mealSheetDetent)
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
             }
             .sheet(isPresented: $showPlan) {
-                ApplyPlanSheet(startDate: selectedDate)
-                    .presentationDetents([.medium, .large], selection: $planSheetDetent)
-                    .presentationDragIndicator(.visible)
-                    .presentationCornerRadius(24)
+                Group {
+                    if scope == .household {
+                        HouseholdApplyPlanSheet(startDate: selectedDate)
+                    } else {
+                        ApplyPlanSheet(startDate: selectedDate)
+                    }
+                }
+                .presentationDetents([.medium, .large], selection: $planSheetDetent)
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
             }
-            .sheet(item: $selectedRecipe) { recipe in RecipeDetailView(recipe: recipe) }
-        }
+            .sheet(item: $selectedRecipe) { recipe in
+                RecipeDetailView(recipe: recipe, allowsHouseholdSharing: scope != .household)
+            }
     }
 
-    private var header: some View { LibraryHeader(title: "Meal Planning") }
+    private var header: some View { LibraryHeader(title: scope == .household ? "Household Calendar" : "Meal Planning") }
 
     private var modePicker: some View {
         HStack {
@@ -1129,7 +1645,7 @@ struct CalendarView: View {
     }
 
     private func mealStatusBubble(for day: Date, type: MealType) -> some View {
-        let isScheduled = store.meals(on: day).contains { $0.mealType == type }
+        let isScheduled = meals(on: day).contains { $0.mealType == type }
         return Circle()
             .fill(isScheduled ? AppTheme.mealIndicator : Color.clear)
             .overlay(Circle().stroke(AppTheme.mealIndicator, lineWidth: 1))
@@ -1139,11 +1655,11 @@ struct CalendarView: View {
     private var selectedDayMeals: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(selectedDate.formatted(date: .complete, time: .omitted)).font(.custom("Plus Jakarta Sans", size: 20).weight(.semibold)).foregroundStyle(AppTheme.text)
-            if store.meals(on: selectedDate).isEmpty {
+            if meals(on: selectedDate).isEmpty {
                 Text("No meals planned").font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.label).padding(.vertical, 16).frame(maxWidth: .infinity).background(AppTheme.surface).clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
-                ForEach(store.meals(on: selectedDate)) { scheduled in
-                    if let recipe = store.recipe(scheduled.recipeID) {
+                ForEach(meals(on: selectedDate)) { scheduled in
+                    if let recipe = recipe(scheduled.recipeID) {
                         scheduledMealCard(scheduled, recipe: recipe)
                     }
                 }
@@ -1153,8 +1669,8 @@ struct CalendarView: View {
 
     @ViewBuilder
     private func weeklyMealSlot(_ type: MealType, for date: Date) -> some View {
-        let scheduled = store.meals(on: date).first { $0.mealType == type }
-        if let scheduled, let recipe = store.recipe(scheduled.recipeID) {
+        let scheduled = meals(on: date).first { $0.mealType == type }
+        if let scheduled, let recipe = recipe(scheduled.recipeID) {
             scheduledMealCard(scheduled, recipe: recipe)
         } else {
             Button { selectedDate = date; mealTypeToAdd = type; mealSheetDetent = .large; showMeal = true } label: {
@@ -1172,7 +1688,7 @@ struct CalendarView: View {
         }
     }
 
-    private func scheduledMealCard(_ scheduled: CalendarMeal, recipe: Recipe) -> some View {
+    private func scheduledMealCard(_ scheduled: CalendarDisplayMeal, recipe: Recipe) -> some View {
         HStack(spacing: 12) {
             Image(scheduled.mealType == .dinner ? "FigmaRecipe1" : "FigmaRecipe3")
                 .resizable().scaledToFill().frame(width: 50, height: 50).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -1181,7 +1697,7 @@ struct CalendarView: View {
                 Text(recipe.title).font(.custom("Plus Jakarta Sans", size: 15).weight(.semibold)).foregroundStyle(AppTheme.text)
             }
             Spacer()
-            Button(role: .destructive) { store.calendarMeals.removeAll { $0.id == scheduled.id } } label: { Image(systemName: "xmark").font(.caption.weight(.bold)).foregroundStyle(AppTheme.label).frame(width: 32, height: 32).background(AppTheme.input).clipShape(Circle()) }
+            Button(role: .destructive) { remove(scheduled) } label: { Image(systemName: "xmark").font(.caption.weight(.bold)).foregroundStyle(AppTheme.label).frame(width: 32, height: 32).background(AppTheme.input).clipShape(Circle()) }
         }
         .padding(12).background(AppTheme.surface).clipShape(RoundedRectangle(cornerRadius: 14))
         .contentShape(RoundedRectangle(cornerRadius: 14))
@@ -1192,6 +1708,29 @@ struct CalendarView: View {
         VStack(alignment: .trailing, spacing: 10) {
             Button { planSheetDetent = .large; showPlan = true } label: { Label("Apply plan", systemImage: "square.stack.3d.up.fill").font(.subheadline.bold()).padding(.horizontal, 16).padding(.vertical, 11).background(AppTheme.surface).foregroundStyle(AppTheme.text).clipShape(Capsule()) }
             Button { mealTypeToAdd = nil; mealSheetDetent = .large; showMeal = true } label: { Label("Add Meal", systemImage: "plus").font(.subheadline.bold()).padding(.horizontal, 18).padding(.vertical, 13).background(AppTheme.primary).foregroundStyle(.black).clipShape(Capsule()) }
+        }
+    }
+
+    private func meals(on date: Date) -> [CalendarDisplayMeal] {
+        if scope == .household {
+            return householdStore.meals(on: date).map {
+                CalendarDisplayMeal(id: $0.id, date: $0.date, mealType: $0.mealType, recipeID: $0.recipeID, householdMeal: $0)
+            }
+        }
+        return store.meals(on: date).map {
+            CalendarDisplayMeal(id: $0.id, date: $0.date, mealType: $0.mealType, recipeID: $0.recipeID, householdMeal: nil)
+        }
+    }
+
+    private func recipe(_ id: UUID) -> Recipe? {
+        scope == .household ? householdStore.recipe(id) : store.recipe(id)
+    }
+
+    private func remove(_ meal: CalendarDisplayMeal) {
+        if let householdMeal = meal.householdMeal {
+            Task { try? await householdStore.removeCalendarMeal(householdMeal) }
+        } else {
+            store.calendarMeals.removeAll { $0.id == meal.id }
         }
     }
 

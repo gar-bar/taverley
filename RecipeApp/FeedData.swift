@@ -126,6 +126,67 @@ extension SupabaseDataClient {
         try await deleteReaction(table: "post_favourites", postID: postID, userID: userID, accessToken: accessToken)
     }
 
+    func loadFavouritePosts(
+        for userID: UUID,
+        offset: Int,
+        limit: Int,
+        accessToken: String
+    ) async throws -> FavouritePage<FeedItem> {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/post_favourites"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "select", value: "post_id"),
+            URLQueryItem(name: "user_id", value: "eq.\(userID.uuidString)"),
+            URLQueryItem(name: "order", value: "created_at.desc"),
+            URLQueryItem(name: "offset", value: "\(offset)"),
+            URLQueryItem(name: "limit", value: "\(limit)")
+        ]
+        let (records, totalCount): ([PostIDRecord], Int) = try await pagedGet(components.url!, accessToken: accessToken)
+        let postIDs = records.map(\.postID)
+        let posts = try await fetchPosts(ids: postIDs, accessToken: accessToken)
+        let postsByID = Dictionary(uniqueKeysWithValues: posts.map { ($0.id, $0) })
+        let orderedPosts = postIDs.compactMap { postsByID[$0] }
+        let authorIDs = Array(Set(orderedPosts.map(\.authorID)))
+        let recipeIDs = Array(Set(orderedPosts.compactMap(\.recipeID)))
+        async let profiles = fetchProfiles(ids: authorIDs, accessToken: accessToken)
+        async let recipes = fetchPublishedRecipes(ids: recipeIDs, accessToken: accessToken)
+        let resolvedProfiles = try await profiles
+        let resolvedRecipes = try await recipes
+        let items = orderedPosts.compactMap { post -> FeedItem? in
+            guard let author = resolvedProfiles[post.authorID] else { return nil }
+            return FeedItem(post: post, author: author, recipe: post.recipeID.flatMap { resolvedRecipes[$0] })
+        }
+        return FavouritePage(
+            items: items,
+            nextOffset: offset + records.count < totalCount ? offset + records.count : nil,
+            totalCount: totalCount
+        )
+    }
+
+    func loadFavouriteRecipes(
+        for userID: UUID,
+        offset: Int,
+        limit: Int,
+        accessToken: String
+    ) async throws -> FavouritePage<Recipe> {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/recipe_favourites"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "select", value: "recipe_id"),
+            URLQueryItem(name: "user_id", value: "eq.\(userID.uuidString)"),
+            URLQueryItem(name: "order", value: "created_at.desc"),
+            URLQueryItem(name: "offset", value: "\(offset)"),
+            URLQueryItem(name: "limit", value: "\(limit)")
+        ]
+        let (records, totalCount): ([RecipeIDRecord], Int) = try await pagedGet(components.url!, accessToken: accessToken)
+        let recipeIDs = records.map(\.recipeID)
+        let recipesByID = try await fetchPublishedRecipes(ids: recipeIDs, accessToken: accessToken)
+        let recipes = recipeIDs.compactMap { recipesByID[$0] }
+        return FavouritePage(
+            items: recipes,
+            nextOffset: offset + records.count < totalCount ? offset + records.count : nil,
+            totalCount: totalCount
+        )
+    }
+
     func createRecipeFavourite(recipeID: UUID, accessToken: String) async throws {
         let url = configuration.url.appending(path: "rest/v1/recipe_favourites")
         var request = authorizedRequest(url: url, accessToken: accessToken)
@@ -268,6 +329,17 @@ extension SupabaseDataClient {
         })
     }
 
+    private func fetchPosts(ids: [UUID], accessToken: String) async throws -> [FeedPost] {
+        guard !ids.isEmpty else { return [] }
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/feed_posts"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "select", value: "id,author_id,title,body,recipe_id,photo_paths,created_at"),
+            URLQueryItem(name: "id", value: "in.(\(ids.map(\.uuidString).joined(separator: ",")))")
+        ]
+        let records: [FeedPostRecord] = try await get(components.url!, accessToken: accessToken)
+        return records.compactMap(\.post)
+    }
+
     private func fetchPublishedRecipes(ids: [UUID], accessToken: String) async throws -> [UUID: Recipe] {
         guard !ids.isEmpty else { return [:] }
         var components = URLComponents(url: configuration.url.appending(path: "rest/v1/recipes"), resolvingAgainstBaseURL: false)!
@@ -284,6 +356,18 @@ extension SupabaseDataClient {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         return try JSONDecoder().decode(Response.self, from: data)
+    }
+
+    private func pagedGet<Response: Decodable>(_ url: URL, accessToken: String) async throws -> (Response, Int) {
+        var request = authorizedRequest(url: url, accessToken: accessToken)
+        request.setValue("count=exact", forHTTPHeaderField: "Prefer")
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        guard let httpResponse = response as? HTTPURLResponse else { throw SyncError.invalidResponse }
+        let totalCount = httpResponse.value(forHTTPHeaderField: "Content-Range")?
+            .split(separator: "/").last
+            .flatMap { Int($0) } ?? 0
+        return (try JSONDecoder().decode(Response.self, from: data), totalCount)
     }
 
     private func authorizedRequest(url: URL, accessToken: String) -> URLRequest {
@@ -307,13 +391,13 @@ private struct ProfileRecord: Codable {
 
     init(_ profile: UserProfile) {
         id = profile.id
-        displayName = profile.displayName
+        displayName = profile.username
         username = profile.username
     }
 
     var profile: UserProfile? {
         guard let username, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return UserProfile(id: id, displayName: displayName, username: username)
+        return UserProfile(id: id, displayName: username, username: username)
     }
 }
 
@@ -490,6 +574,8 @@ final class FeedStore: ObservableObject {
     @Published private(set) var favouritedPostIDs: Set<UUID> = []
     @Published private(set) var favouritedRecipeIDs: Set<UUID> = []
     @Published private(set) var commentsByPost: [UUID: [FeedComment]] = [:]
+    @Published private(set) var favouriteRecipeState = FavouriteListState<Recipe>()
+    @Published private(set) var favouritePostState = FavouriteListState<FeedItem>()
     private var postLikes: [FeedReaction] = []
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
@@ -510,6 +596,8 @@ final class FeedStore: ObservableObject {
         favouritedRecipeIDs = []
         commentsByPost = [:]
         postLikes = []
+        favouriteRecipeState = FavouriteListState()
+        favouritePostState = FavouriteListState()
         isLoading = true
         defer { isLoading = false }
         do {
@@ -531,6 +619,8 @@ final class FeedStore: ObservableObject {
         favouritedRecipeIDs = []
         commentsByPost = [:]
         postLikes = []
+        favouriteRecipeState = FavouriteListState()
+        favouritePostState = FavouriteListState()
         items = FeedSeed.items
         errorMessage = nil
         isLoading = false
@@ -561,15 +651,16 @@ final class FeedStore: ObservableObject {
         }
     }
 
-    func saveProfile(displayName: String, username: String) async throws {
+    func saveProfile(username: String) async throws {
         guard let client, let session else { throw SyncError.service(message: "Sign in to create a profile.") }
+        let username = UsernamePolicy.normalize(username)
         let profile = UserProfile(
             id: session.user.id,
-            displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
-            username: UsernamePolicy.normalize(username)
+            displayName: username,
+            username: username
         )
-        guard !profile.displayName.isEmpty, UsernamePolicy.isValid(profile.username) else {
-            throw SyncError.service(message: "Enter a display name and a valid username.")
+        guard UsernamePolicy.isValid(profile.username) else {
+            throw SyncError.service(message: "Enter a valid username.")
         }
         currentProfile = try await client.saveProfile(profile, accessToken: session.accessToken)
     }
@@ -724,10 +815,12 @@ final class FeedStore: ObservableObject {
         if favouritedPostIDs.contains(postID) {
             try await client.deletePostFavourite(postID: postID, userID: session.user.id, accessToken: session.accessToken)
             favouritedPostIDs.remove(postID)
+            removeFavouritePostFromPage(postID)
         } else {
             try await client.createPostFavourite(postID: postID, accessToken: session.accessToken)
             favouritedPostIDs.insert(postID)
         }
+        favouritePostState.hasLoaded = false
     }
 
     func toggleRecipeFavourite(recipeID: UUID) async throws {
@@ -735,10 +828,18 @@ final class FeedStore: ObservableObject {
         if favouritedRecipeIDs.contains(recipeID) {
             try await client.deleteRecipeFavourite(recipeID: recipeID, userID: session.user.id, accessToken: session.accessToken)
             favouritedRecipeIDs.remove(recipeID)
+            removeFavouriteRecipeFromPage(recipeID)
         } else {
             try await client.createRecipeFavourite(recipeID: recipeID, accessToken: session.accessToken)
             favouritedRecipeIDs.insert(recipeID)
         }
+        favouriteRecipeState.hasLoaded = false
+    }
+
+    /// Marks cached favourite pages stale without discarding their visible items.
+    func invalidateFavouritePages() {
+        favouriteRecipeState.hasLoaded = false
+        favouritePostState.hasLoaded = false
     }
 
     func addComment(to postID: UUID, body: String) async throws {
@@ -750,6 +851,76 @@ final class FeedStore: ObservableObject {
         let comment = try await client.createPostComment(postID: postID, body: trimmedBody, accessToken: session.accessToken)
         let item = FeedComment(comment: comment, author: currentProfile)
         commentsByPost[postID, default: []].append(item)
+    }
+
+    func loadFavouritePage(kind: FavouriteKind, reset: Bool = false) async {
+        guard let client, let session else { return }
+        switch kind {
+        case .recipes:
+            guard !favouriteRecipeState.isLoading else { return }
+            guard let offset = reset ? Optional(0) : favouriteRecipeState.nextOffset else { return }
+            favouriteRecipeState.isLoading = true
+            favouriteRecipeState.errorMessage = nil
+            do {
+                let page = try await client.loadFavouriteRecipes(
+                    for: session.user.id,
+                    offset: offset,
+                    limit: 25,
+                    accessToken: session.accessToken
+                )
+                var items = reset ? [] : favouriteRecipeState.items
+                let knownIDs = Set(items.map(\.id))
+                items.append(contentsOf: page.items.filter { !knownIDs.contains($0.id) })
+                favouriteRecipeState.items = items
+                favouriteRecipeState.nextOffset = page.nextOffset
+                favouriteRecipeState.totalCount = page.totalCount
+                favouriteRecipeState.isLoading = false
+                favouriteRecipeState.hasLoaded = true
+            } catch {
+                favouriteRecipeState.isLoading = false
+                favouriteRecipeState.errorMessage = error.localizedDescription
+            }
+        case .posts:
+            guard !favouritePostState.isLoading else { return }
+            guard let offset = reset ? Optional(0) : favouritePostState.nextOffset else { return }
+            favouritePostState.isLoading = true
+            favouritePostState.errorMessage = nil
+            do {
+                let page = try await client.loadFavouritePosts(
+                    for: session.user.id,
+                    offset: offset,
+                    limit: 25,
+                    accessToken: session.accessToken
+                )
+                var items = reset ? [] : favouritePostState.items
+                let knownIDs = Set(items.map(\.id))
+                items.append(contentsOf: page.items.filter { !knownIDs.contains($0.id) })
+                favouritePostState.items = items
+                favouritePostState.nextOffset = page.nextOffset
+                favouritePostState.totalCount = page.totalCount
+                favouritePostState.isLoading = false
+                favouritePostState.hasLoaded = true
+            } catch {
+                favouritePostState.isLoading = false
+                favouritePostState.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func removeFavouritePostFromPage(_ postID: UUID) {
+        favouritePostState.items.removeAll { $0.id == postID }
+        favouritePostState.totalCount = max(0, favouritePostState.totalCount - 1)
+        if let offset = favouritePostState.nextOffset {
+            favouritePostState.nextOffset = max(favouritePostState.items.count, offset - 1)
+        }
+    }
+
+    private func removeFavouriteRecipeFromPage(_ recipeID: UUID) {
+        favouriteRecipeState.items.removeAll { $0.id == recipeID }
+        favouriteRecipeState.totalCount = max(0, favouriteRecipeState.totalCount - 1)
+        if let offset = favouriteRecipeState.nextOffset {
+            favouriteRecipeState.nextOffset = max(favouriteRecipeState.items.count, offset - 1)
+        }
     }
 }
 

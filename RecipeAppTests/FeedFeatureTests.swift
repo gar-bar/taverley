@@ -33,6 +33,13 @@ struct FeedFeatureTests {
         #expect(UsernamePolicy.normalize("UPPERCASE") == "uppercase")
     }
 
+    @Test func passwordPolicyRequiresTwelveCharactersNumberAndSymbol() {
+        #expect(PasswordPolicy.isValid("long-password1"))
+        #expect(!PasswordPolicy.isValid("short-p1!"))
+        #expect(!PasswordPolicy.isValid("long-password!"))
+        #expect(!PasswordPolicy.isValid("longpassword12"))
+    }
+
     @Test func feedSearchMatchesEverySupportedField() {
         let recipe = Recipe(
             title: "Lemon Pasta",
@@ -71,5 +78,70 @@ struct FeedFeatureTests {
         #expect(decoded == post)
         #expect(decoded.recipeID == nil)
         #expect(decoded.photoPaths.isEmpty)
+    }
+
+    @Test func favouriteFiltersAreExclusiveAndStartWithRecipes() {
+        let selected = FavouriteKind.recipes
+
+        #expect(selected == .recipes)
+        #expect(FavouriteKind.allCases == [.recipes, .posts])
+    }
+
+    @Test func favouritePageCarriesIndependentPaginationMetadata() {
+        let recipe = Recipe(title: "Saved", summary: "", author: "Cook", servings: 1, tags: [], ingredients: [], steps: [], nutrition: [])
+        let page = FavouritePage(items: [recipe], nextOffset: 25, totalCount: 26)
+
+        #expect(page.items.map(\.id) == [recipe.id])
+        #expect(page.nextOffset == 25)
+        #expect(page.totalCount == 26)
+    }
+
+    @Test func householdInvitationExpiresAndCannotBeAccepted() {
+        let inviter = UserProfile(id: authorID, displayName: "Owner", username: "owner")
+        let invitation = HouseholdInvitation(
+            id: UUID(), householdID: UUID(), householdName: "Test Kitchen", inviter: inviter, invitee: nil,
+            inviteeID: UUID(), status: .pending, createdAt: Date(timeIntervalSince1970: 1),
+            expiresAt: Date(timeIntervalSince1970: 2), respondedAt: nil
+        )
+        #expect(invitation.isExpired)
+        #expect(!invitation.canRespond)
+    }
+
+    @Test func householdRecipeCopyIsIndependent() {
+        let original = Recipe(title: "Soup", summary: "Original", author: "Cook", servings: 2, tags: [], ingredients: [], steps: [], nutrition: [])
+        let copiedID = UUID()
+        var copy = HouseholdSharingPolicy.copy(original, id: copiedID)
+        copy.title = "Household Soup"
+        #expect(copy.id == copiedID)
+        #expect(original.title == "Soup")
+        #expect(copy.title == "Household Soup")
+    }
+
+    @Test func householdPlanRemapsRecipes() {
+        let originalRecipeID = UUID()
+        let sharedRecipeID = UUID()
+        let plan = MealPlan(name: "Week", tags: [], weekCount: 1, meals: [PlanMeal(week: 1, weekday: 1, mealType: .dinner, recipeID: originalRecipeID)])
+        let copy = HouseholdSharingPolicy.copy(plan, recipeIDs: [originalRecipeID: sharedRecipeID])
+        #expect(copy.meals.first?.recipeID == sharedRecipeID)
+        #expect(plan.meals.first?.recipeID == originalRecipeID)
+    }
+
+    @Test func householdCalendarReplacesOnlyMatchingSlot() {
+        let householdID = UUID()
+        let userID = UUID()
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        let breakfast = HouseholdCalendarMeal(id: UUID(), householdID: householdID, date: day, mealType: .breakfast, recipeID: UUID(), createdBy: userID, updatedBy: userID, updatedAt: day)
+        let dinner = HouseholdCalendarMeal(id: UUID(), householdID: householdID, date: day, mealType: .dinner, recipeID: UUID(), createdBy: userID, updatedBy: userID, updatedAt: day)
+        let replacement = HouseholdCalendarMeal(id: UUID(), householdID: householdID, date: day, mealType: .dinner, recipeID: UUID(), createdBy: userID, updatedBy: userID, updatedAt: day)
+        let result = HouseholdCalendarPolicy.upserting(replacement, into: [breakfast, dinner])
+        #expect(result.count == 2)
+        #expect(result.contains { $0.id == breakfast.id })
+        #expect(result.contains { $0.id == replacement.id })
+        #expect(!result.contains { $0.id == dinner.id })
+    }
+
+    @Test func householdOptimisticVersionMustMatch() {
+        #expect(HouseholdConflictPolicy.isCurrent(localVersion: 3, remoteVersion: 3))
+        #expect(!HouseholdConflictPolicy.isCurrent(localVersion: 2, remoteVersion: 3))
     }
 }

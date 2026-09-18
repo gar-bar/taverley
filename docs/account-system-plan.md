@@ -3,13 +3,14 @@
 ## Current implementation
 
 - The app requires authentication before showing recipes and meal plans.
-- Development sign-in uses email and password. Test accounts are created manually in Supabase.
+- Users can create accounts, confirm their email with a six-digit code, sign in, and recover forgotten passwords.
 - A successful session is stored securely in Keychain and refreshed when needed.
 - Recipe, meal-plan, and calendar data are designed to load and save privately per account.
 - Existing local demo data is not migrated into an account; a new account begins empty.
 - Apple sign-in is intentionally not implemented yet.
-- Signed-in accounts can complete a display name and unique username, read the shared feed, and publish posts with optional live recipe links and up to four photos.
-- The sign-in screen has a persistent **Skip for now** option for development. It uses local-only data and sends no authentication email.
+- A unique username is the account's visible identity throughout the app.
+- Signed-in users can permanently delete their account from Account Settings after password reauthentication and typing `DELETE`.
+- The sign-in screen has a **Skip for now** option in Debug builds only.
 
 ## Required before the first end-to-end test
 
@@ -21,7 +22,7 @@
 
    This adds shared posts, unique usernames, authenticated access to linked recipes, and the protected post-photo bucket.
 
-3. In Supabase **Authentication → Users**, create a user with an email and password, and auto-confirm the email.
+3. Run the remaining migrations through `20260918130000_account_lifecycle.sql`, install the signup and recovery email templates, and deploy the `delete-account` Edge Function.
 
 4. Verify the full flow:
 
@@ -29,22 +30,14 @@
    - Create a recipe, meal plan, and calendar entry.
    - Relaunch the app and confirm the data is still present.
 
-## Development limitations
-
-- The app has no self-service sign-up or password reset yet.
-- Test accounts must be created manually in the Supabase Dashboard.
-
-These are acceptable for personal development only.
-
 ## Before inviting external testers or launching
 
 1. Buy or use a domain you control.
 2. Configure custom SMTP (for example, Resend) in Supabase.
 3. Set up SPF, DKIM, and DMARC DNS records for the sending domain.
 4. Change the sender to something like `Taverley <no-reply@auth.yourdomain.com>`.
-5. Add self-service registration and password reset, then decide whether to retain passwords, add magic links, or restore six-digit email codes. The ready-to-use code email is in [magic-link.html](../supabase/templates/magic-link.html).
-6. Test sign-in and account recovery with non-team email addresses.
-7. Review Supabase Auth rate limits and error logs.
+5. Test signup, recovery, and account deletion with non-team email addresses.
+6. Review Supabase Auth rate limits and error logs.
 
 ## Apple sign-in: defer until release preparation
 
@@ -56,8 +49,8 @@ These are acceptable for personal development only.
 
 ## Future product work
 
-- Add account settings: display name, profile editing, and sign out.
+- Add username editing and profile customization.
 - Add avatar image upload to Supabase Storage instead of device-only storage.
 - Add sync status and error feedback in the app rather than silently retrying after a failed save.
 - Add conflict handling for edits made from multiple devices.
-- Add data export and account deletion controls before public launch.
+- Add account data export before public launch.

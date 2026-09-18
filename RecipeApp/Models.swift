@@ -77,7 +77,7 @@ struct FeedReaction: Hashable {
     var userID: UUID
 }
 
-struct FeedItem: Identifiable {
+struct FeedItem: Identifiable, Hashable {
     var post: FeedPost
     var author: UserProfile
     var recipe: Recipe?
@@ -88,7 +88,6 @@ struct FeedItem: Identifiable {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return true }
         let searchable = [
-            author.displayName,
             author.username,
             "@\(author.username)",
             post.title,
@@ -98,6 +97,155 @@ struct FeedItem: Identifiable {
         ]
         return searchable.contains { $0.localizedCaseInsensitiveContains(query) }
     }
+}
+
+enum FavouriteKind: String, CaseIterable, Identifiable {
+    case recipes
+    case posts
+
+    var id: String { rawValue }
+    var title: String { self == .recipes ? "Recipes" : "Posts" }
+}
+
+enum HouseholdRole: String, Codable, Hashable {
+    case owner
+    case member
+}
+
+enum HouseholdInvitationStatus: String, Codable, Hashable {
+    case pending
+    case accepted
+    case declined
+    case revoked
+    case expired
+}
+
+enum CalendarScope: String, CaseIterable, Identifiable {
+    case personal = "Personal"
+    case household = "Household"
+
+    var id: Self { self }
+}
+
+struct Household: Identifiable, Codable, Hashable {
+    var id: UUID
+    var name: String
+    var ownerID: UUID
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+struct HouseholdMember: Identifiable, Codable, Hashable {
+    var householdID: UUID
+    var userID: UUID
+    var role: HouseholdRole
+    var joinedAt: Date
+    var profile: UserProfile
+
+    var id: UUID { userID }
+}
+
+struct HouseholdInvitation: Identifiable, Codable, Hashable {
+    var id: UUID
+    var householdID: UUID
+    var householdName: String
+    var inviter: UserProfile
+    var invitee: UserProfile?
+    var inviteeID: UUID
+    var status: HouseholdInvitationStatus
+    var createdAt: Date
+    var expiresAt: Date
+    var respondedAt: Date?
+
+    var isExpired: Bool { expiresAt <= Date() }
+    var canRespond: Bool { status == .pending && !isExpired }
+}
+
+struct HouseholdRecipe: Identifiable, Codable, Hashable {
+    var householdID: UUID
+    var sourceRecipeID: UUID?
+    var createdBy: UUID?
+    var updatedBy: UUID?
+    var version: Int
+    var recipe: Recipe
+    var updatedAt: Date
+
+    var id: UUID { recipe.id }
+}
+
+struct HouseholdMealPlan: Identifiable, Codable, Hashable {
+    var householdID: UUID
+    var sourcePlanID: UUID?
+    var createdBy: UUID?
+    var updatedBy: UUID?
+    var version: Int
+    var plan: MealPlan
+    var updatedAt: Date
+
+    var id: UUID { plan.id }
+}
+
+struct HouseholdCalendarMeal: Identifiable, Codable, Hashable {
+    var id: UUID
+    var householdID: UUID
+    var date: Date
+    var mealType: MealType
+    var recipeID: UUID
+    var assignmentID: UUID?
+    var createdBy: UUID?
+    var updatedBy: UUID?
+    var updatedAt: Date
+}
+
+enum HouseholdConflictPolicy {
+    static func isCurrent(localVersion: Int, remoteVersion: Int) -> Bool {
+        localVersion == remoteVersion
+    }
+}
+
+enum HouseholdSharingPolicy {
+    static func copy(_ recipe: Recipe, id: UUID = UUID()) -> Recipe {
+        var copy = recipe
+        copy.id = id
+        copy.createdAt = Date()
+        return copy
+    }
+
+    static func copy(_ plan: MealPlan, id: UUID = UUID(), recipeIDs: [UUID: UUID]) -> MealPlan {
+        var copy = plan
+        copy.id = id
+        copy.createdAt = Date()
+        copy.meals = plan.meals.compactMap { meal in
+            guard let recipeID = recipeIDs[meal.recipeID] else { return nil }
+            var copiedMeal = meal
+            copiedMeal.recipeID = recipeID
+            return copiedMeal
+        }
+        return copy
+    }
+}
+
+enum HouseholdCalendarPolicy {
+    static func upserting(_ meal: HouseholdCalendarMeal, into meals: [HouseholdCalendarMeal], calendar: Calendar = .current) -> [HouseholdCalendarMeal] {
+        meals.filter { !calendar.isDate($0.date, inSameDayAs: meal.date) || $0.mealType != meal.mealType } + [meal]
+    }
+}
+
+struct FavouritePage<Item> {
+    var items: [Item]
+    var nextOffset: Int?
+    var totalCount: Int
+}
+
+struct FavouriteListState<Item: Identifiable> {
+    var items: [Item] = []
+    var nextOffset: Int? = 0
+    var totalCount = 0
+    var isLoading = false
+    var errorMessage: String?
+    var hasLoaded = false
+
+    var hasMore: Bool { nextOffset != nil }
 }
 
 enum UsernamePolicy {
