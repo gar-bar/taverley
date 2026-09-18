@@ -221,6 +221,8 @@ struct FeedPostCard: View {
                     .accessibilityLabel("Open recipe \(recipe.title)")
                 }
             }
+
+            PostEngagementBar(postID: item.id, onComment: onOpen)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -302,10 +304,84 @@ struct FeedPostCard: View {
     }
 }
 
+private struct PostEngagementBar: View {
+    @EnvironmentObject private var feedStore: FeedStore
+    let postID: UUID
+    let onComment: () -> Void
+    @State private var errorMessage: String?
+
+    private var isLiked: Bool { feedStore.likedPostIDs.contains(postID) }
+    private var isFavourited: Bool { feedStore.favouritedPostIDs.contains(postID) }
+    private var likeCount: Int { feedStore.likeCount(for: postID) }
+    private var commentCount: Int { feedStore.comments(for: postID).count }
+
+    var body: some View {
+        HStack(spacing: 20) {
+            Button { update { try await feedStore.togglePostLike(postID: postID) } } label: {
+                HStack(spacing: 5) {
+                    Image("IconlyHeart")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 21, height: 21)
+                    if likeCount > 0 { Text("\(likeCount)") }
+                }
+                .foregroundStyle(isLiked ? AppTheme.primary : AppTheme.label)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isLiked ? "Unlike post" : "Like post")
+
+            Button(action: onComment) {
+                HStack(spacing: 5) {
+                    Image("IconlyChat")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 21, height: 21)
+                    if commentCount > 0 { Text("\(commentCount)") }
+                }
+                .foregroundStyle(AppTheme.label)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(commentCount == 1 ? "Open 1 comment" : "Open \(commentCount) comments")
+
+            Spacer()
+
+            Button { update { try await feedStore.togglePostFavourite(postID: postID) } } label: {
+                Image(systemName: isFavourited ? "star.fill" : "star")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(isFavourited ? AppTheme.primary : AppTheme.label)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isFavourited ? "Remove post from favourites" : "Favourite post")
+        }
+        .font(.caption.weight(.semibold))
+        .alert("Couldn’t update post", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "Please try again.")
+        }
+    }
+
+    private func update(_ action: @escaping () async throws -> Void) {
+        Task {
+            do { try await action() }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+}
+
 struct PostDetailView: View {
     @EnvironmentObject private var feedStore: FeedStore
     @Environment(\.dismiss) private var dismiss
     let postID: UUID
+    @State private var commentText = ""
+    @State private var commentError: String?
+    @FocusState private var isCommentFocused: Bool
 
     private var item: FeedItem? {
         feedStore.items.first { $0.id == postID }
@@ -337,6 +413,10 @@ struct PostDetailView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
 
+                            PostEngagementBar(postID: item.id) {
+                                isCommentFocused = true
+                            }
+
                             if let recipe = item.recipe {
                                 VStack(alignment: .leading, spacing: 9) {
                                     Text("Linked Recipe")
@@ -352,6 +432,8 @@ struct PostDetailView: View {
                                     .accessibilityLabel("Open recipe \(recipe.title)")
                                 }
                             }
+
+                            commentsSection(for: item.id)
                         }
                         .padding(16)
                         .padding(.bottom, 28)
@@ -366,6 +448,14 @@ struct PostDetailView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .alert("Couldn’t add comment", isPresented: Binding(
+            get: { commentError != nil },
+            set: { if !$0 { commentError = nil } }
+        )) {
+            Button("OK") { commentError = nil }
+        } message: {
+            Text(commentError ?? "Please try again.")
+        }
     }
 
     private func detailAuthorRow(_ author: UserProfile) -> some View {
@@ -388,6 +478,75 @@ struct PostDetailView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Posted by \(author.displayName), at \(author.username)")
+    }
+
+    private func commentsSection(for postID: UUID) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Comments")
+                .font(.custom("Plus Jakarta Sans", size: 20).weight(.semibold))
+                .foregroundStyle(AppTheme.text)
+
+            let comments = feedStore.comments(for: postID)
+            if comments.isEmpty {
+                Text("Be the first to comment.")
+                    .font(.custom("Inter", size: 14))
+                    .foregroundStyle(AppTheme.label)
+            } else {
+                ForEach(comments) { comment in
+                    HStack(alignment: .top, spacing: 9) {
+                        Text(comment.author.displayName.initials)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.black)
+                            .frame(width: 28, height: 28)
+                            .background(AppTheme.primary)
+                            .clipShape(Circle())
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(comment.author.displayName)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AppTheme.text)
+                            Text(comment.comment.body)
+                                .font(.custom("Inter", size: 14))
+                                .foregroundStyle(AppTheme.text.opacity(0.92))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField("Add a comment", text: $commentText, axis: .vertical)
+                    .lineLimit(1...4)
+                    .font(.custom("Inter", size: 15))
+                    .foregroundStyle(AppTheme.text)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(AppTheme.input)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .focused($isCommentFocused)
+
+                Button("Post") { submitComment(to: postID) }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 13)
+                    .frame(height: 42)
+                    .background(AppTheme.primary)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func submitComment(to postID: UUID) {
+        Task {
+            do {
+                try await feedStore.addComment(to: postID, body: commentText)
+                commentText = ""
+                isCommentFocused = false
+            } catch {
+                commentError = error.localizedDescription
+            }
+        }
     }
 }
 

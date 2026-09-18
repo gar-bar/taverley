@@ -38,7 +38,7 @@ struct AuthenticationGate: View {
                     .onAppear { feedStore.deactivateAccount() }
             } else if let session = authentication.session, let dataClient = authentication.dataClient {
                 RootView()
-                    .task(id: session.user.id) {
+                    .task(id: session.accessToken) {
                         await store.activateAccount(session, client: dataClient)
                         await feedStore.activateAccount(session, client: dataClient)
                     }
@@ -185,11 +185,14 @@ struct ProfileView: View {
     @State private var showAccountOptions = false
     @State private var selectedPostID: UUID?
 
-    private var featuredRecipes: [Recipe] { Array(store.recipes.prefix(8)) }
+    private var featuredRecipes: [Recipe] {
+        Array(store.recipes.sorted { $0.createdAt > $1.createdAt }.prefix(5))
+    }
     private var authoredPosts: [FeedItem] {
         guard let userID = feedStore.currentProfile?.id ?? feedStore.currentUserID else { return [] }
         return feedStore.items.filter { $0.post.authorID == userID }
     }
+    private var featuredPosts: [FeedItem] { Array(authoredPosts.prefix(5)) }
 
     var body: some View {
         NavigationStack {
@@ -261,13 +264,23 @@ struct ProfileView: View {
                     .padding(.horizontal, 24)
                     .padding(.top, 26)
 
-                    HStack(alignment: .firstTextBaseline, spacing: 14) {
-                        Text("Recipes")
-                            .font(.custom("Plus Jakarta Sans", size: 30).weight(.bold))
-                        Text("\(store.recipes.count)")
-                            .font(.custom("Inter", size: 28))
-                            .foregroundStyle(AppTheme.label)
+                    NavigationLink {
+                        ProfileRecipesView()
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 14) {
+                            Text("Recipes")
+                                .font(.custom("Plus Jakarta Sans", size: 30).weight(.bold))
+                            Text("\(store.recipes.count)")
+                                .font(.custom("Inter", size: 28))
+                                .foregroundStyle(AppTheme.label)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AppTheme.label)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show all \(store.recipes.count) recipes")
                     .foregroundStyle(AppTheme.text)
                     .padding(.horizontal, 24)
                     .padding(.top, 44)
@@ -294,13 +307,23 @@ struct ProfileView: View {
                         .scrollIndicators(.hidden)
                     }
 
-                    HStack(alignment: .firstTextBaseline, spacing: 14) {
-                        Text("Posts")
-                            .font(.custom("Plus Jakarta Sans", size: 30).weight(.bold))
-                        Text("\(authoredPosts.count)")
-                            .font(.custom("Inter", size: 28))
-                            .foregroundStyle(AppTheme.label)
+                    NavigationLink {
+                        ProfilePostsView()
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 14) {
+                            Text("Posts")
+                                .font(.custom("Plus Jakarta Sans", size: 30).weight(.bold))
+                            Text("\(authoredPosts.count)")
+                                .font(.custom("Inter", size: 28))
+                                .foregroundStyle(AppTheme.label)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AppTheme.label)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show all \(authoredPosts.count) posts")
                     .foregroundStyle(AppTheme.text)
                     .padding(.horizontal, 24)
                     .padding(.top, 20)
@@ -314,7 +337,7 @@ struct ProfileView: View {
                             .padding(.bottom, 112)
                     } else {
                         LazyVStack(spacing: 0) {
-                            ForEach(authoredPosts) { post in
+                            ForEach(featuredPosts) { post in
                                 FeedPostCard(item: post) {
                                     selectedPostID = post.id
                                 }
@@ -354,6 +377,99 @@ struct ProfileView: View {
         } else {
             Image("FigmaRecipe3").resizable().scaledToFill()
         }
+    }
+}
+
+private struct ProfilePostsView: View {
+    @EnvironmentObject private var feedStore: FeedStore
+    @State private var selectedPostID: UUID?
+
+    private var authoredPosts: [FeedItem] {
+        guard let userID = feedStore.currentProfile?.id ?? feedStore.currentUserID else { return [] }
+        return feedStore.items.filter { $0.post.authorID == userID }
+    }
+
+    var body: some View {
+        ZStack {
+            AppTheme.background.ignoresSafeArea()
+
+            if authoredPosts.isEmpty {
+                ContentUnavailableView(
+                    "No posts yet",
+                    systemImage: "text.bubble",
+                    description: Text("Posts you share will appear here.")
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(authoredPosts) { post in
+                            FeedPostCard(item: post) {
+                                selectedPostID = post.id
+                            }
+                            Divider()
+                                .overlay(AppTheme.border)
+                                .padding(.horizontal, 16)
+                        }
+                    }
+                    .padding(.bottom, 24)
+                }
+                .scrollIndicators(.hidden)
+            }
+        }
+        .navigationTitle("Posts")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(AppTheme.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .navigationDestination(item: $selectedPostID) { postID in
+            PostDetailView(postID: postID)
+        }
+    }
+}
+
+private struct ProfileRecipesView: View {
+    @EnvironmentObject private var store: MealStore
+
+    private var recipes: [Recipe] {
+        store.recipes.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    var body: some View {
+        ZStack {
+            AppTheme.background.ignoresSafeArea()
+
+            if recipes.isEmpty {
+                ContentUnavailableView(
+                    "No recipes yet",
+                    systemImage: "book.closed",
+                    description: Text("Your recipes will appear here.")
+                )
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible())],
+                        spacing: 12
+                    ) {
+                        ForEach(recipes) { recipe in
+                            NavigationLink {
+                                RecipeDetailView(recipe: recipe)
+                            } label: {
+                                RecipeCard(recipe: recipe)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(16)
+                    .padding(.bottom, 24)
+                }
+                .scrollIndicators(.hidden)
+            }
+        }
+        .navigationTitle("Recipes")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(AppTheme.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
     }
 }
 
@@ -531,14 +647,14 @@ struct RecipeCard: View {
 }
 
 struct RecipeDetailView: View {
-    @EnvironmentObject private var store: MealStore; @Environment(\.dismiss) private var dismiss; let recipe: Recipe; @State private var scale = 1.0; @State private var ingredientsOpen = true; @State private var stepsOpen = false; @State private var nutritionOpen = false
+    @EnvironmentObject private var store: MealStore; @EnvironmentObject private var feedStore: FeedStore; @Environment(\.dismiss) private var dismiss; let recipe: Recipe; @State private var scale = 1.0; @State private var ingredientsOpen = true; @State private var stepsOpen = false; @State private var nutritionOpen = false
     var body: some View { ZStack { AppTheme.background.ignoresSafeArea(); ScrollView { VStack(spacing: 0) {
         ZStack(alignment: .top) {
             Group {
                 if let data = recipe.imageData, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() }
                 else { Image("FigmaHero").resizable().scaledToFill() }
             }.frame(height: 180).clipped().overlay(AppTheme.background.opacity(0.28))
-            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text).frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle()) }; Spacer(); Button { } label: { Image(systemName: "star") }; Button { } label: { Image(systemName: "square.and.arrow.up") } }.font(.body.weight(.semibold)).foregroundStyle(AppTheme.text).padding(.horizontal, 16).padding(.top, 14)
+            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text).frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle()) }; Spacer(); Button { Task { try? await feedStore.toggleRecipeFavourite(recipeID: recipe.id) } } label: { Image(systemName: feedStore.favouritedRecipeIDs.contains(recipe.id) ? "star.fill" : "star").foregroundStyle(feedStore.favouritedRecipeIDs.contains(recipe.id) ? AppTheme.primary : AppTheme.text) }.accessibilityLabel(feedStore.favouritedRecipeIDs.contains(recipe.id) ? "Remove recipe from favourites" : "Favourite recipe"); Button { } label: { Image(systemName: "square.and.arrow.up") } }.font(.body.weight(.semibold)).foregroundStyle(AppTheme.text).padding(.horizontal, 16).padding(.top, 14)
         }
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) { Circle().fill(AppTheme.primary.opacity(0.35)).frame(width: 25, height: 25).overlay(Image(systemName: "person.fill").font(.caption)); VStack(alignment: .leading, spacing: 0) { Text(recipe.author).font(.custom("Inter", size: 12).weight(.medium)); Text("@\(recipe.author.lowercased())").font(.custom("Inter", size: 10)).foregroundStyle(AppTheme.label) }; Spacer(); VStack(alignment: .trailing, spacing: 2) { Label("4.8 (30)", systemImage: "star.fill").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.primary); Text("30 Minutes").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label) } }

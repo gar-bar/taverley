@@ -33,7 +33,7 @@ final class MealStore: ObservableObject {
     }
     func meals(on date: Date) -> [CalendarMeal] { calendarMeals.filter { Calendar.current.isDate($0.date, inSameDayAs: date) }.sorted { $0.mealType.sortOrder < $1.mealType.sortOrder } }
     func activateAccount(_ session: AuthSession, client: SupabaseDataClient) async {
-        guard syncSession?.user.id != session.user.id else { return }
+        guard syncSession?.accessToken != session.accessToken || syncSession?.user.id != session.user.id else { return }
         syncClient = client
         syncSession = session
         storageKey = "meal-core-state-v2-\(session.user.id.uuidString)"

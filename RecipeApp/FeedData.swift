@@ -4,6 +4,10 @@ struct FeedPayload {
     var posts: [FeedPost]
     var profiles: [UUID: UserProfile]
     var recipes: [UUID: Recipe]
+    var likes: [FeedReaction]
+    var favouritedPostIDs: Set<UUID>
+    var comments: [PostComment]
+    var favouritedRecipeIDs: Set<UUID>
 }
 
 extension SupabaseDataClient {
@@ -32,7 +36,7 @@ extension SupabaseDataClient {
         return saved
     }
 
-    func loadFeed(accessToken: String) async throws -> FeedPayload {
+    func loadFeed(for userID: UUID, accessToken: String) async throws -> FeedPayload {
         var postComponents = URLComponents(url: configuration.url.appending(path: "rest/v1/feed_posts"), resolvingAgainstBaseURL: false)!
         postComponents.queryItems = [
             URLQueryItem(name: "select", value: "id,author_id,title,body,recipe_id,photo_paths,created_at"),
@@ -40,12 +44,27 @@ extension SupabaseDataClient {
         ]
         let records: [FeedPostRecord] = try await get(postComponents.url!, accessToken: accessToken)
         let posts = records.compactMap(\.post)
-        let authorIDs = Array(Set(posts.map(\.authorID)))
         let recipeIDs = Array(Set(posts.compactMap(\.recipeID)))
 
+        async let likes = fetchPostLikes(accessToken: accessToken)
+        async let comments = fetchPostComments(accessToken: accessToken)
+        async let favouritedPostIDs = fetchFavouritePostIDs(for: userID, accessToken: accessToken)
+        async let favouritedRecipeIDs = fetchFavouriteRecipeIDs(for: userID, accessToken: accessToken)
+
+        let resolvedLikes = try await likes
+        let resolvedComments = try await comments
+        let authorIDs = Array(Set(posts.map(\.authorID) + resolvedComments.map(\.authorID)))
         async let profiles = fetchProfiles(ids: authorIDs, accessToken: accessToken)
         async let recipes = fetchPublishedRecipes(ids: recipeIDs, accessToken: accessToken)
-        return try await FeedPayload(posts: posts, profiles: profiles, recipes: recipes)
+        return try await FeedPayload(
+            posts: posts,
+            profiles: profiles,
+            recipes: recipes,
+            likes: resolvedLikes,
+            favouritedPostIDs: favouritedPostIDs,
+            comments: resolvedComments,
+            favouritedRecipeIDs: favouritedRecipeIDs
+        )
     }
 
     func createPost(_ post: FeedPost, accessToken: String) async throws -> FeedPost {
@@ -91,6 +110,61 @@ extension SupabaseDataClient {
         try validate(response, data: data)
     }
 
+    func createPostLike(postID: UUID, accessToken: String) async throws {
+        try await createReaction(table: "post_likes", postID: postID, accessToken: accessToken)
+    }
+
+    func deletePostLike(postID: UUID, userID: UUID, accessToken: String) async throws {
+        try await deleteReaction(table: "post_likes", postID: postID, userID: userID, accessToken: accessToken)
+    }
+
+    func createPostFavourite(postID: UUID, accessToken: String) async throws {
+        try await createReaction(table: "post_favourites", postID: postID, accessToken: accessToken)
+    }
+
+    func deletePostFavourite(postID: UUID, userID: UUID, accessToken: String) async throws {
+        try await deleteReaction(table: "post_favourites", postID: postID, userID: userID, accessToken: accessToken)
+    }
+
+    func createRecipeFavourite(recipeID: UUID, accessToken: String) async throws {
+        let url = configuration.url.appending(path: "rest/v1/recipe_favourites")
+        var request = authorizedRequest(url: url, accessToken: accessToken)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        request.httpBody = try JSONEncoder().encode([RecipeFavouriteWriteRecord(recipeID: recipeID)])
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+    }
+
+    func deleteRecipeFavourite(recipeID: UUID, userID: UUID, accessToken: String) async throws {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/recipe_favourites"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "recipe_id", value: "eq.\(recipeID.uuidString)"),
+            URLQueryItem(name: "user_id", value: "eq.\(userID.uuidString)")
+        ]
+        var request = authorizedRequest(url: components.url!, accessToken: accessToken)
+        request.httpMethod = "DELETE"
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+    }
+
+    func createPostComment(postID: UUID, body: String, accessToken: String) async throws -> PostComment {
+        let url = configuration.url.appending(path: "rest/v1/post_comments")
+        var request = authorizedRequest(url: url, accessToken: accessToken)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("return=representation", forHTTPHeaderField: "Prefer")
+        request.httpBody = try JSONEncoder().encode([PostCommentWriteRecord(postID: postID, body: body)])
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        guard let comment = try JSONDecoder().decode([PostCommentRecord].self, from: data).first?.comment else {
+            throw SyncError.invalidResponse
+        }
+        return comment
+    }
+
     func uploadPostPhoto(_ data: Data, path: String, accessToken: String) async throws {
         let url = configuration.url.appending(path: "storage/v1/object/post-photos/\(path)")
         var request = authorizedRequest(url: url, accessToken: accessToken)
@@ -117,6 +191,67 @@ extension SupabaseDataClient {
         request.httpMethod = "DELETE"
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
+    }
+
+    private func createReaction(table: String, postID: UUID, accessToken: String) async throws {
+        let url = configuration.url.appending(path: "rest/v1/\(table)")
+        var request = authorizedRequest(url: url, accessToken: accessToken)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        request.httpBody = try JSONEncoder().encode([PostReactionWriteRecord(postID: postID)])
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+    }
+
+    private func deleteReaction(table: String, postID: UUID, userID: UUID, accessToken: String) async throws {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/\(table)"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "post_id", value: "eq.\(postID.uuidString)"),
+            URLQueryItem(name: "user_id", value: "eq.\(userID.uuidString)")
+        ]
+        var request = authorizedRequest(url: components.url!, accessToken: accessToken)
+        request.httpMethod = "DELETE"
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+    }
+
+    private func fetchPostLikes(accessToken: String) async throws -> [FeedReaction] {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/post_likes"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "select", value: "post_id,user_id")]
+        let records: [PostReactionRecord] = try await get(components.url!, accessToken: accessToken)
+        return records.map(\.reaction)
+    }
+
+    private func fetchPostComments(accessToken: String) async throws -> [PostComment] {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/post_comments"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "select", value: "id,post_id,author_id,body,created_at"),
+            URLQueryItem(name: "order", value: "created_at.asc")
+        ]
+        let records: [PostCommentRecord] = try await get(components.url!, accessToken: accessToken)
+        return records.compactMap(\.comment)
+    }
+
+    private func fetchFavouritePostIDs(for userID: UUID, accessToken: String) async throws -> Set<UUID> {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/post_favourites"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "select", value: "post_id"),
+            URLQueryItem(name: "user_id", value: "eq.\(userID.uuidString)")
+        ]
+        let records: [PostIDRecord] = try await get(components.url!, accessToken: accessToken)
+        return Set(records.map(\.postID))
+    }
+
+    private func fetchFavouriteRecipeIDs(for userID: UUID, accessToken: String) async throws -> Set<UUID> {
+        var components = URLComponents(url: configuration.url.appending(path: "rest/v1/recipe_favourites"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "select", value: "recipe_id"),
+            URLQueryItem(name: "user_id", value: "eq.\(userID.uuidString)")
+        ]
+        let records: [RecipeIDRecord] = try await get(components.url!, accessToken: accessToken)
+        return Set(records.map(\.recipeID))
     }
 
     private func fetchProfiles(ids: [UUID], accessToken: String) async throws -> [UUID: UserProfile] {
@@ -215,6 +350,69 @@ private struct FeedPostRecord: Codable {
     }
 }
 
+private struct PostReactionRecord: Decodable {
+    let postID: UUID
+    let userID: UUID
+
+    enum CodingKeys: String, CodingKey {
+        case postID = "post_id"
+        case userID = "user_id"
+    }
+
+    var reaction: FeedReaction { FeedReaction(postID: postID, userID: userID) }
+}
+
+private struct PostReactionWriteRecord: Encodable {
+    let postID: UUID
+
+    enum CodingKeys: String, CodingKey { case postID = "post_id" }
+}
+
+private struct PostIDRecord: Decodable {
+    let postID: UUID
+    enum CodingKeys: String, CodingKey { case postID = "post_id" }
+}
+
+private struct RecipeIDRecord: Decodable {
+    let recipeID: UUID
+    enum CodingKeys: String, CodingKey { case recipeID = "recipe_id" }
+}
+
+private struct RecipeFavouriteWriteRecord: Encodable {
+    let recipeID: UUID
+    enum CodingKeys: String, CodingKey { case recipeID = "recipe_id" }
+}
+
+private struct PostCommentRecord: Decodable {
+    let id: UUID
+    let postID: UUID
+    let authorID: UUID
+    let body: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, body
+        case postID = "post_id"
+        case authorID = "author_id"
+        case createdAt = "created_at"
+    }
+
+    var comment: PostComment? {
+        guard let date = FeedDateCoding.date(from: createdAt) else { return nil }
+        return PostComment(id: id, postID: postID, authorID: authorID, body: body, createdAt: date)
+    }
+}
+
+private struct PostCommentWriteRecord: Encodable {
+    let postID: UUID
+    let body: String
+
+    enum CodingKeys: String, CodingKey {
+        case postID = "post_id"
+        case body
+    }
+}
+
 private struct FeedPostInsertRecord: Encodable {
     let id: UUID
     let title: String
@@ -288,6 +486,11 @@ final class FeedStore: ObservableObject {
     @Published private(set) var items: [FeedItem] = FeedSeed.items
     @Published private(set) var currentProfile: UserProfile?
     @Published private(set) var photoData: [String: Data] = [:]
+    @Published private(set) var likedPostIDs: Set<UUID> = []
+    @Published private(set) var favouritedPostIDs: Set<UUID> = []
+    @Published private(set) var favouritedRecipeIDs: Set<UUID> = []
+    @Published private(set) var commentsByPost: [UUID: [FeedComment]] = [:]
+    private var postLikes: [FeedReaction] = []
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
 
@@ -298,10 +501,15 @@ final class FeedStore: ObservableObject {
     var currentUserID: UUID? { session?.user.id }
 
     func activateAccount(_ session: AuthSession, client: SupabaseDataClient) async {
-        guard self.session?.user.id != session.user.id else { return }
+        guard self.session?.accessToken != session.accessToken || self.session?.user.id != session.user.id else { return }
         self.session = session
         self.client = client
         photoData = [:]
+        likedPostIDs = []
+        favouritedPostIDs = []
+        favouritedRecipeIDs = []
+        commentsByPost = [:]
+        postLikes = []
         isLoading = true
         defer { isLoading = false }
         do {
@@ -318,6 +526,11 @@ final class FeedStore: ObservableObject {
         session = nil
         currentProfile = nil
         photoData = [:]
+        likedPostIDs = []
+        favouritedPostIDs = []
+        favouritedRecipeIDs = []
+        commentsByPost = [:]
+        postLikes = []
         items = FeedSeed.items
         errorMessage = nil
         isLoading = false
@@ -328,11 +541,19 @@ final class FeedStore: ObservableObject {
         if items.isEmpty { isLoading = true }
         defer { isLoading = false }
         do {
-            let payload = try await client.loadFeed(accessToken: session.accessToken)
+            let payload = try await client.loadFeed(for: session.user.id, accessToken: session.accessToken)
             items = payload.posts.compactMap { post in
                 guard let author = payload.profiles[post.authorID] else { return nil }
                 return FeedItem(post: post, author: author, recipe: post.recipeID.flatMap { payload.recipes[$0] })
             }.sorted { $0.post.createdAt > $1.post.createdAt }
+            postLikes = payload.likes
+            likedPostIDs = Set(payload.likes.compactMap { $0.userID == session.user.id ? $0.postID : nil })
+            favouritedPostIDs = payload.favouritedPostIDs
+            favouritedRecipeIDs = payload.favouritedRecipeIDs
+            commentsByPost = Dictionary(grouping: payload.comments.compactMap { comment in
+                guard let author = payload.profiles[comment.authorID] else { return nil }
+                return FeedComment(comment: comment, author: author)
+            }, by: { $0.comment.postID })
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -460,6 +681,10 @@ final class FeedStore: ObservableObject {
         }
         try await client.deletePost(id: post.id, accessToken: session.accessToken)
         items.removeAll { $0.post.id == post.id }
+        postLikes.removeAll { $0.postID == post.id }
+        likedPostIDs.remove(post.id)
+        favouritedPostIDs.remove(post.id)
+        commentsByPost[post.id] = nil
         for path in post.photoPaths {
             try? await client.deletePostPhoto(path: path, accessToken: session.accessToken)
             photoData[path] = nil
@@ -471,6 +696,60 @@ final class FeedStore: ObservableObject {
         if let data = try? await client.downloadPostPhoto(path: path, accessToken: session.accessToken) {
             photoData[path] = data
         }
+    }
+
+    func likeCount(for postID: UUID) -> Int {
+        postLikes.count { $0.postID == postID }
+    }
+
+    func comments(for postID: UUID) -> [FeedComment] {
+        commentsByPost[postID] ?? []
+    }
+
+    func togglePostLike(postID: UUID) async throws {
+        guard let client, let session else { throw SyncError.service(message: "Sign in to like posts.") }
+        if likedPostIDs.contains(postID) {
+            try await client.deletePostLike(postID: postID, userID: session.user.id, accessToken: session.accessToken)
+            likedPostIDs.remove(postID)
+            postLikes.removeAll { $0.postID == postID && $0.userID == session.user.id }
+        } else {
+            try await client.createPostLike(postID: postID, accessToken: session.accessToken)
+            likedPostIDs.insert(postID)
+            postLikes.append(FeedReaction(postID: postID, userID: session.user.id))
+        }
+    }
+
+    func togglePostFavourite(postID: UUID) async throws {
+        guard let client, let session else { throw SyncError.service(message: "Sign in to favourite posts.") }
+        if favouritedPostIDs.contains(postID) {
+            try await client.deletePostFavourite(postID: postID, userID: session.user.id, accessToken: session.accessToken)
+            favouritedPostIDs.remove(postID)
+        } else {
+            try await client.createPostFavourite(postID: postID, accessToken: session.accessToken)
+            favouritedPostIDs.insert(postID)
+        }
+    }
+
+    func toggleRecipeFavourite(recipeID: UUID) async throws {
+        guard let client, let session else { throw SyncError.service(message: "Sign in to favourite recipes.") }
+        if favouritedRecipeIDs.contains(recipeID) {
+            try await client.deleteRecipeFavourite(recipeID: recipeID, userID: session.user.id, accessToken: session.accessToken)
+            favouritedRecipeIDs.remove(recipeID)
+        } else {
+            try await client.createRecipeFavourite(recipeID: recipeID, accessToken: session.accessToken)
+            favouritedRecipeIDs.insert(recipeID)
+        }
+    }
+
+    func addComment(to postID: UUID, body: String) async throws {
+        guard let client, let session, let currentProfile else {
+            throw SyncError.service(message: "Complete your profile before commenting.")
+        }
+        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBody.isEmpty else { throw SyncError.service(message: "Write a comment before posting.") }
+        let comment = try await client.createPostComment(postID: postID, body: trimmedBody, accessToken: session.accessToken)
+        let item = FeedComment(comment: comment, author: currentProfile)
+        commentsByPost[postID, default: []].append(item)
     }
 }
 

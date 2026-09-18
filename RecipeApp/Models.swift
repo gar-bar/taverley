@@ -57,6 +57,26 @@ struct FeedPost: Identifiable, Codable, Hashable {
     }
 }
 
+struct PostComment: Identifiable, Codable, Hashable {
+    var id: UUID
+    var postID: UUID
+    var authorID: UUID
+    var body: String
+    var createdAt: Date
+}
+
+struct FeedComment: Identifiable, Hashable {
+    var comment: PostComment
+    var author: UserProfile
+
+    var id: UUID { comment.id }
+}
+
+struct FeedReaction: Hashable {
+    var postID: UUID
+    var userID: UUID
+}
+
 struct FeedItem: Identifiable {
     var post: FeedPost
     var author: UserProfile

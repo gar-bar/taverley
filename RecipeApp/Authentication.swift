@@ -125,6 +125,7 @@ final class AuthenticationStore: ObservableObject {
     private let client: SupabaseAuthClient?
     private let configuration: SupabaseConfiguration?
     private let sessionStore = SecureSessionStore()
+    private var refreshTask: Task<Void, Never>?
 
     init(configuration: SupabaseConfiguration? = .current) {
         self.configuration = configuration
@@ -146,9 +147,11 @@ final class AuthenticationStore: ObservableObject {
         let newSession = try await client.signIn(email: email, password: password)
         sessionStore.save(newSession)
         session = newSession
+        scheduleRefresh(for: newSession)
     }
 
     func signOut() {
+        refreshTask?.cancel()
         sessionStore.clear()
         session = nil
         isSkippingForNow = false
@@ -156,7 +159,10 @@ final class AuthenticationStore: ObservableObject {
 
     private func restore(_ savedSession: AuthSession) async {
         defer { isRestoring = false }
-        guard savedSession.expiresAt.timeIntervalSinceNow < 60 else { return }
+        guard savedSession.expiresAt.timeIntervalSinceNow < 60 else {
+            scheduleRefresh(for: savedSession)
+            return
+        }
         guard let client else {
             sessionStore.clear()
             session = nil
@@ -166,9 +172,22 @@ final class AuthenticationStore: ObservableObject {
             let refreshedSession = try await client.refresh(savedSession.refreshToken)
             sessionStore.save(refreshedSession)
             session = refreshedSession
+            scheduleRefresh(for: refreshedSession)
         } catch {
             sessionStore.clear()
             session = nil
+        }
+    }
+
+    private func scheduleRefresh(for session: AuthSession) {
+        refreshTask?.cancel()
+        let delay = max(0, session.expiresAt.timeIntervalSinceNow - 60)
+        refreshTask = Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard !Task.isCancelled else { return }
+            await self?.restore(session)
         }
     }
 }
