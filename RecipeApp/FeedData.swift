@@ -14,7 +14,7 @@ extension SupabaseDataClient {
     func loadCurrentProfile(for userID: UUID, accessToken: String) async throws -> UserProfile? {
         var components = URLComponents(url: configuration.url.appending(path: "rest/v1/profiles"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(name: "select", value: "id,display_name,username"),
+            URLQueryItem(name: "select", value: "id,display_name,username,is_private"),
             URLQueryItem(name: "id", value: "eq.\(userID.uuidString)")
         ]
         let records: [ProfileRecord] = try await get(components.url!, accessToken: accessToken)
@@ -37,13 +37,7 @@ extension SupabaseDataClient {
     }
 
     func loadFeed(for userID: UUID, accessToken: String) async throws -> FeedPayload {
-        var postComponents = URLComponents(url: configuration.url.appending(path: "rest/v1/feed_posts"), resolvingAgainstBaseURL: false)!
-        postComponents.queryItems = [
-            URLQueryItem(name: "select", value: "id,author_id,title,body,recipe_id,photo_paths,created_at"),
-            URLQueryItem(name: "order", value: "created_at.desc")
-        ]
-        let records: [FeedPostRecord] = try await get(postComponents.url!, accessToken: accessToken)
-        let posts = records.compactMap(\.post)
+        let posts = try await fetchFollowingPosts(accessToken: accessToken)
         let recipeIDs = Array(Set(posts.compactMap(\.recipeID)))
 
         async let likes = fetchPostLikes(accessToken: accessToken)
@@ -382,22 +376,25 @@ private struct ProfileRecord: Codable {
     let id: UUID
     let displayName: String
     let username: String?
+    let isPrivate: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
         case displayName = "display_name"
         case username
+        case isPrivate = "is_private"
     }
 
     init(_ profile: UserProfile) {
         id = profile.id
         displayName = profile.username
         username = profile.username
+        isPrivate = profile.isPrivate
     }
 
     var profile: UserProfile? {
         guard let username, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return UserProfile(id: id, displayName: username, username: username)
+        return UserProfile(id: id, displayName: username, username: username, isPrivate: isPrivate ?? false)
     }
 }
 
@@ -651,17 +648,35 @@ final class FeedStore: ObservableObject {
         }
     }
 
+    func refreshCurrentProfile() async {
+        guard let client, let session else { return }
+        do {
+            currentProfile = try await client.loadCurrentProfile(for: session.user.id, accessToken: session.accessToken)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func saveProfile(username: String) async throws {
         guard let client, let session else { throw SyncError.service(message: "Sign in to create a profile.") }
         let username = UsernamePolicy.normalize(username)
         let profile = UserProfile(
             id: session.user.id,
             displayName: username,
-            username: username
+            username: username,
+            isPrivate: currentProfile?.isPrivate ?? false
         )
         guard UsernamePolicy.isValid(profile.username) else {
             throw SyncError.service(message: "Enter a valid username.")
         }
+        currentProfile = try await client.saveProfile(profile, accessToken: session.accessToken)
+    }
+
+    func setProfilePrivacy(isPrivate: Bool) async throws {
+        guard let client, let session, var profile = currentProfile else {
+            throw SyncError.service(message: "Complete your profile before changing privacy.")
+        }
+        profile.isPrivate = isPrivate
         currentProfile = try await client.saveProfile(profile, accessToken: session.accessToken)
     }
 

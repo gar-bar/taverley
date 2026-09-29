@@ -71,6 +71,59 @@ struct FeedFeatureTests {
         #expect([older, newer].sorted { $0.post.createdAt > $1.post.createdAt }.map(\.post.title) == ["Newer", "Older"])
     }
 
+    @Test func socialSearchNormalizesAtPrefixWhitespaceAndCase() {
+        #expect(SocialSearchPolicy.normalize("  @Elisa.Kazan  ") == "elisa.kazan")
+        #expect(SocialSearchPolicy.normalize("   ").isEmpty)
+    }
+
+    @Test func usersCannotFollowThemselves() {
+        #expect(!SocialFollowPolicy.canFollow(currentUserID: authorID, profileID: authorID))
+        #expect(SocialFollowPolicy.canFollow(currentUserID: authorID, profileID: UUID()))
+    }
+
+    @Test func optimisticFollowTransitionUpdatesFollowerCount() {
+        let unfollowed = ProfileRelationship(isFollowing: false, followerCount: 3, followingCount: 7)
+        let followed = unfollowed.togglingFollow()
+        #expect(followed.isFollowing)
+        #expect(followed.followerCount == 4)
+        #expect(followed.followingCount == 7)
+        #expect(followed.togglingFollow() == unfollowed)
+    }
+
+    @Test func privateFollowRequestDoesNotIncreaseFollowerCountUntilApproved() {
+        let relationship = ProfileRelationship(isFollowing: false, followerCount: 3, followingCount: 7)
+        let requested = relationship.applyingFollowResult(isFollowing: false, isRequested: true)
+        #expect(requested.followerCount == 3)
+        #expect(requested.isRequested)
+        let approved = requested.applyingFollowResult(isFollowing: true, isRequested: false)
+        #expect(approved.followerCount == 4)
+        #expect(approved.isFollowing)
+        #expect(!approved.isRequested)
+    }
+
+    @Test func socialPaginationDeduplicatesExistingPeople() {
+        let first = SocialProfileSummary(
+            profile: UserProfile(id: authorID, displayName: "Cook", username: "cook"),
+            relationship: ProfileRelationship(isFollowing: false, followerCount: 0, followingCount: 0)
+        )
+        let second = SocialProfileSummary(
+            profile: UserProfile(id: UUID(), displayName: "Baker", username: "baker"),
+            relationship: ProfileRelationship(isFollowing: true, followerCount: 1, followingCount: 2)
+        )
+        #expect(SocialPagePolicy.merging([first], with: [first, second]).map(\.id) == [first.id, second.id])
+    }
+
+    @Test func sharedRecipesAreDeduplicatedInPostOrder() {
+        let firstRecipe = UUID()
+        let secondRecipe = UUID()
+        let posts = [
+            FeedPost(authorID: authorID, title: "One", body: "Body", recipeID: firstRecipe, photoPaths: []),
+            FeedPost(authorID: authorID, title: "Again", body: "Body", recipeID: firstRecipe, photoPaths: []),
+            FeedPost(authorID: authorID, title: "Two", body: "Body", recipeID: secondRecipe, photoPaths: [])
+        ]
+        #expect(SharedRecipePolicy.recipeIDs(from: posts) == [firstRecipe, secondRecipe])
+    }
+
     @Test func postRoundTripWithoutRecipeOrPhotos() throws {
         let post = FeedPost(authorID: authorID, title: "Title", body: "Body", recipeID: nil, photoPaths: [])
         let decoded = try JSONDecoder().decode(FeedPost.self, from: JSONEncoder().encode(post))
@@ -78,6 +131,27 @@ struct FeedFeatureTests {
         #expect(decoded == post)
         #expect(decoded.recipeID == nil)
         #expect(decoded.photoPaths.isEmpty)
+    }
+
+    @Test func persistedSessionKeepsAbsoluteExpiryAcrossRelaunch() throws {
+        let expiry = Date(timeIntervalSince1970: 1_800_000_000)
+        let session = AuthSession(
+            accessToken: "access", refreshToken: "refresh", expiresAt: expiry,
+            user: AuthUser(id: authorID, email: "cook@example.com")
+        )
+
+        let encoded = try JSONEncoder().encode(session)
+        let stored = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(stored["stored_expires_at"] as? Double == expiry.timeIntervalSince1970)
+        #expect(stored["expires_in"] == nil)
+        #expect(try JSONDecoder().decode(AuthSession.self, from: encoded).expiresAt == expiry)
+    }
+
+    @Test func authResponseUsesServerAbsoluteExpiry() throws {
+        let json = #"{"access_token":"access","refresh_token":"refresh","expires_in":3600,"expires_at":1800000000,"user":{"id":"C4C505D4-A77F-43E1-B6A0-C2F837110BA2","email":"cook@example.com"}}"#
+        let decoded = try JSONDecoder().decode(AuthSession.self, from: Data(json.utf8))
+
+        #expect(decoded.expiresAt == Date(timeIntervalSince1970: 1_800_000_000))
     }
 
     @Test func recipeNutritionFactsRoundTrip() throws {
@@ -90,6 +164,23 @@ struct FeedFeatureTests {
 
         #expect(decoded.nutrition == facts)
         #expect(decoded.calories == 420)
+    }
+
+    @Test func legacyRecipeDecodesWithoutTimeFields() throws {
+        let json = #"{"id":"00000000-0000-0000-0000-000000000001","title":"Soup","summary":"","author":"Cook","servings":2,"tags":[],"ingredients":[],"steps":[],"nutrition":[],"notes":"","createdAt":0}"#
+        let decoded = try JSONDecoder().decode(Recipe.self, from: Data(json.utf8))
+
+        #expect(decoded.prepTimeMinutes == nil)
+        #expect(decoded.cookTimeMinutes == nil)
+        #expect(decoded.totalTimeMinutes == nil)
+    }
+
+    @Test func recipeTotalTimeCombinesAvailableParts() {
+        var recipe = Recipe(title: "Pasta", summary: "", author: "Cook", servings: 2, tags: [], ingredients: [], steps: [], nutrition: [])
+        recipe.prepTimeMinutes = 15
+        #expect(recipe.totalTimeMinutes == 15)
+        recipe.cookTimeMinutes = 20
+        #expect(recipe.totalTimeMinutes == 35)
     }
 
     @Test func favouriteFiltersAreExclusiveAndStartWithRecipes() {

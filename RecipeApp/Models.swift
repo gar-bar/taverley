@@ -20,7 +20,14 @@ struct Recipe: Identifiable, Codable, Hashable {
     var id = UUID(); var title: String; var summary: String; var author: String; var servings: Int
     var tags: [String]; var ingredients: [Ingredient]; var steps: [RecipeStep]; var nutrition: [NutritionFact]; var imageData: Data? = nil
     var notes: String = ""; var createdAt = Date()
+    /// Optional so existing account caches and Supabase payloads remain compatible.
+    var prepTimeMinutes: Int? = nil
+    var cookTimeMinutes: Int? = nil
     var calories: Double? { nutrition.first { $0.name.lowercased() == "calories" }?.amount }
+    var totalTimeMinutes: Int? {
+        let parts = [prepTimeMinutes, cookTimeMinutes].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.reduce(0, +)
+    }
 }
 
 struct PlanMeal: Identifiable, Codable, Hashable {
@@ -39,6 +46,67 @@ struct UserProfile: Identifiable, Codable, Hashable {
     var id: UUID
     var displayName: String
     var username: String
+    /// Profiles default to public so locally cached profiles created before the
+    /// privacy setting existed continue to decode safely.
+    var isPrivate: Bool = false
+
+    enum CodingKeys: String, CodingKey { case id, displayName, username, isPrivate }
+
+    init(id: UUID, displayName: String, username: String, isPrivate: Bool = false) {
+        self.id = id
+        self.displayName = displayName
+        self.username = username
+        self.isPrivate = isPrivate
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        displayName = try values.decode(String.self, forKey: .displayName)
+        username = try values.decode(String.self, forKey: .username)
+        isPrivate = try values.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
+    }
+}
+
+struct UserFollow: Codable, Hashable {
+    var followerID: UUID
+    var followedID: UUID
+    var createdAt: Date
+}
+
+struct ProfileRelationship: Hashable {
+    var isFollowing: Bool
+    var isRequested: Bool = false
+    var followerCount: Int
+    var followingCount: Int
+}
+
+struct SocialProfileSummary: Identifiable, Hashable {
+    var profile: UserProfile
+    var relationship: ProfileRelationship
+    var id: UUID { profile.id }
+}
+
+struct PublicProfileContent: Hashable {
+    var profile: UserProfile
+    var posts: [FeedItem]
+    var recipes: [Recipe]
+}
+
+struct FollowRequest: Identifiable, Hashable {
+    var requester: UserProfile
+    var createdAt: Date
+    var id: UUID { requester.id }
+}
+
+struct SocialPage<Element: Identifiable & Hashable>: Hashable where Element.ID: Hashable {
+    var items: [Element] = []
+    var nextOffset: Int? = 0
+    var totalCount = 0
+    var isLoading = false
+    var errorMessage: String?
+
+    var hasMore: Bool { nextOffset != nil }
 }
 
 struct FeedPost: Identifiable, Codable, Hashable {

@@ -29,6 +29,14 @@ The migration also installs the transaction functions used by the app for accept
 
 Run [the account lifecycle migration](migrations/20260918130000_account_lifecycle.sql) after the household migration. It adds username availability and claim functions, prevents partial client-side profile deletion, and prepares household ownership and attribution for permanent account deletion.
 
+Run [the user follows migration](migrations/20260928170000_user_follows.sql) last. It adds public one-way following, relationship RLS, and the authenticated following feed used by the app. Sign out and back in after applying it so the app reloads its social state.
+
+Then run [the private accounts and follow requests migration](migrations/20260928190000_private_accounts_follow_requests.sql). It adds the public/private account switch, approval-based requests for private accounts, the in-app follow-request inbox, and Row Level Security for private posts, linked recipes, engagement, and post photos. Existing follows remain accepted. Sign out and back in after applying it.
+
+Finally, run [the follow profile bootstrap migration](migrations/20260928193000_follow_profile_bootstrap.sql). It repairs older accounts that have an Auth user but no matching profile row before they follow someone.
+
+Run [the automatic follow-profile provisioning migration](migrations/20260928194000_auto_provision_follow_profiles.sql) immediately after it. It removes the legacy-account setup prompt: authenticated users without a profile receive a unique social identity automatically when they first follow someone.
+
 Deploy the authenticated deletion function:
 
 ```sh

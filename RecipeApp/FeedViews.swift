@@ -4,12 +4,14 @@ import UIKit
 
 struct FeedView: View {
     @EnvironmentObject private var feedStore: FeedStore
+    @EnvironmentObject private var socialStore: SocialStore
     @EnvironmentObject private var authentication: AuthenticationStore
     @State private var query = ""
     @State private var activeSheet: FeedSheet?
     @State private var showSignInPrompt = false
     @State private var composeAfterProfileSetup = false
     @State private var selectedPostID: UUID?
+    @FocusState private var isSearchFocused: Bool
 
     private var filteredItems: [FeedItem] {
         feedStore.items.filter { $0.matches(query) }
@@ -33,6 +35,9 @@ struct FeedView: View {
             .toolbar {
                 if authentication.session != nil {
                     ToolbarItem(placement: .topBarTrailing) {
+                        FollowRequestNotificationButton()
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
                         HouseholdNotificationButton()
                     }
                 }
@@ -49,6 +54,10 @@ struct FeedView: View {
             }
             .navigationDestination(item: $selectedPostID) { postID in
                 PostDetailView(postID: postID)
+            }
+            .task(id: query) {
+                do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+                await socialStore.search(query)
             }
             .sheet(item: $activeSheet, onDismiss: {
                 if composeAfterProfileSetup {
@@ -83,6 +92,7 @@ struct FeedView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .foregroundStyle(AppTheme.text)
+                .focused($isSearchFocused)
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -97,6 +107,8 @@ struct FeedView: View {
         .frame(height: 40)
         .background(AppTheme.input)
         .clipShape(Capsule())
+        .contentShape(Capsule())
+        .onTapGesture { isSearchFocused = true }
     }
 
     @ViewBuilder
@@ -119,14 +131,6 @@ struct FeedView: View {
                     .tint(AppTheme.primary)
             }
             Spacer()
-        } else if filteredItems.isEmpty {
-            Spacer()
-            ContentUnavailableView(
-                query.isEmpty ? "No posts yet" : "No matching posts",
-                systemImage: query.isEmpty ? "text.bubble" : "magnifyingglass",
-                description: Text(query.isEmpty ? "Be the first person to share something." : "Try a different username, title, recipe, or ingredient.")
-            )
-            Spacer()
         } else {
             List {
                 if let error = feedStore.errorMessage {
@@ -146,14 +150,58 @@ struct FeedView: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(AppTheme.surface)
                 }
-                ForEach(filteredItems) { item in
-                    FeedPostCard(item: item) {
-                        selectedPostID = item.id
+                if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   (!socialStore.searchResults.isEmpty || socialStore.isSearching || socialStore.searchError != nil) {
+                    Section("People") {
+                        if socialStore.isSearching {
+                            ProgressView().frame(maxWidth: .infinity)
+                                .listRowBackground(AppTheme.background)
+                        } else if let error = socialStore.searchError {
+                            Button("Retry people search: \(error)") { Task { await socialStore.search(query) } }
+                                .font(.caption).foregroundStyle(AppTheme.primary)
+                                .listRowBackground(AppTheme.background)
+                        } else {
+                            ForEach(socialStore.searchResults) { person in
+                                SocialPersonRow(summary: person)
+                                    .listRowBackground(AppTheme.background)
+                                    .listRowSeparatorTint(AppTheme.border)
+                            }
+                        }
                     }
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.visible)
-                        .listRowSeparatorTint(AppTheme.border)
-                        .listRowBackground(AppTheme.background)
+                }
+                if filteredItems.isEmpty {
+                    Group {
+                        if query.isEmpty && feedStore.isAuthenticated {
+                            ContentUnavailableView {
+                                Label("Your feed is ready", systemImage: "person.2")
+                            } description: {
+                                Text("Follow people to see their posts here. Your own posts will appear too.")
+                            } actions: {
+                                Button("Find People") { isSearchFocused = true }
+                                    .buttonStyle(.borderedProminent).tint(AppTheme.primary)
+                            }
+                        } else {
+                            ContentUnavailableView(
+                                query.isEmpty ? "No posts yet" : "No matching posts",
+                                systemImage: query.isEmpty ? "text.bubble" : "magnifyingglass",
+                                description: Text(query.isEmpty ? "Be the first person to share something." : "Try a different username, title, recipe, or ingredient.")
+                            )
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 360)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(AppTheme.background)
+                    .listRowSeparator(.hidden)
+                } else {
+                    ForEach(filteredItems) { item in
+                        FeedPostCard(item: item) {
+                            selectedPostID = item.id
+                        }
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.visible)
+                            .listRowSeparatorTint(AppTheme.border)
+                            .listRowBackground(AppTheme.background)
+                    }
                 }
             }
             .listStyle(.plain)
@@ -189,42 +237,36 @@ struct FeedPostCard: View {
         VStack(alignment: .leading, spacing: 12) {
             authorRow
 
-            HStack(alignment: .top, spacing: 12) {
+            Button(action: onOpen) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Button(action: onOpen) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(item.post.title)
-                                .font(.headline)
-                                .foregroundStyle(AppTheme.text)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(item.post.title)
+                        .font(.headline)
+                        .foregroundStyle(AppTheme.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                            Text(item.post.body)
-                                .font(.body)
-                                .foregroundStyle(AppTheme.text.opacity(0.92))
-                                .lineLimit(3)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Open post \(item.post.title)")
-
-                    if !item.post.photoPaths.isEmpty {
-                        PostPhotoGrid(paths: item.post.photoPaths)
-                            .padding(.top, 5)
-                    }
+                    Text(item.post.body)
+                        .font(.body)
+                        .foregroundStyle(AppTheme.text.opacity(0.92))
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open post \(item.post.title)")
 
-                if let recipe = item.recipe {
-                    NavigationLink {
-                        RecipeDetailView(recipe: recipe)
-                    } label: {
-                        FeedRecipeSummary(recipe: recipe)
-                    }
-                    .buttonStyle(.plain)
-                    .frame(width: 120)
-                    .accessibilityLabel("Open recipe \(recipe.title)")
+            if !item.post.photoPaths.isEmpty {
+                PostPhotoGrid(paths: item.post.photoPaths)
+            }
+
+            if let recipe = item.recipe {
+                NavigationLink {
+                    RecipeDetailView(recipe: recipe)
+                } label: {
+                    FeedRecipeSummary(recipe: recipe)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open recipe \(recipe.title)")
             }
 
             PostEngagementBar(postID: item.id, onComment: onOpen)
@@ -257,7 +299,9 @@ struct FeedPostCard: View {
 
     private var authorRow: some View {
         HStack(spacing: 9) {
-            Button(action: onOpen) {
+            NavigationLink {
+                PublicProfileView(profileID: item.author.id)
+            } label: {
                 HStack(spacing: 9) {
                     Text(item.author.username.initials)
                         .font(.caption.weight(.bold))
@@ -272,7 +316,7 @@ struct FeedPostCard: View {
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Open post by \(item.author.username)")
+            .accessibilityLabel("Open profile for \(item.author.username)")
 
             Spacer()
 
@@ -470,20 +514,24 @@ struct PostDetailView: View {
     }
 
     private func detailAuthorRow(_ author: UserProfile) -> some View {
-        HStack(spacing: 9) {
-            Text(author.username.initials)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.black)
-                .frame(width: 34, height: 34)
-                .background(AppTheme.primary)
-                .clipShape(Circle())
+        NavigationLink {
+            PublicProfileView(profileID: author.id)
+        } label: {
+            HStack(spacing: 9) {
+                Text(author.username.initials)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.black)
+                    .frame(width: 34, height: 34)
+                    .background(AppTheme.primary)
+                    .clipShape(Circle())
 
-            Text(author.username)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(AppTheme.text)
+                Text(author.username)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AppTheme.text)
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Posted by \(author.username)")
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open profile for \(author.username)")
     }
 
     private func commentsSection(for postID: UUID) -> some View {
@@ -500,12 +548,17 @@ struct PostDetailView: View {
             } else {
                 ForEach(comments) { comment in
                     HStack(alignment: .top, spacing: 9) {
-                        Text(comment.author.username.initials)
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.black)
-                            .frame(width: 28, height: 28)
-                            .background(AppTheme.primary)
-                            .clipShape(Circle())
+                        NavigationLink {
+                            PublicProfileView(profileID: comment.author.id)
+                        } label: {
+                            Text(comment.author.username.initials)
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.black)
+                                .frame(width: 28, height: 28)
+                                .background(AppTheme.primary)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
 
                         VStack(alignment: .leading, spacing: 3) {
                             Text(comment.author.username)
@@ -587,16 +640,8 @@ private struct PostDetailPhotoHeader: View {
                 .tabViewStyle(.page(indexDisplayMode: visiblePaths.count > 1 ? .always : .never))
             }
 
-            Button(action: onBack) {
-                Image(systemName: "chevron.left")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppTheme.text)
-                    .frame(width: 32, height: 32)
-                    .background(AppTheme.background.opacity(0.94))
-                    .clipShape(Circle())
-            }
-            .padding(14)
-            .accessibilityLabel("Back")
+            CircularBackButton(action: onBack)
+                .padding(14)
         }
         .fullScreenCover(item: $expandedPhoto) { selection in
             PostPhotoViewer(paths: visiblePaths, initialIndex: selection.index)
@@ -644,19 +689,29 @@ private struct FeedRecipeSummary: View {
 
 private struct PostPhotoGrid: View {
     let paths: [String]
-    private let thumbnailSize: CGFloat = 88
     private let spacing: CGFloat = 9
+    private let thumbnailWidth: CGFloat = 152
+    private let thumbnailHeight: CGFloat = 114
     @State private var selection: PostPhotoSelection?
 
     private var visiblePaths: [String] { Array(paths.prefix(4)) }
 
     var body: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: thumbnailSize, maximum: thumbnailSize), spacing: spacing)],
-            alignment: .leading,
-            spacing: spacing
-        ) {
-            photoButtons
+        HStack(alignment: .top, spacing: 0) {
+            if visiblePaths.count == 1, let path = visiblePaths.first {
+                photoButton(path: path, index: 0)
+                    .frame(width: thumbnailWidth, height: thumbnailHeight)
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.fixed(thumbnailHeight), spacing: spacing), GridItem(.fixed(thumbnailHeight), spacing: spacing)],
+                    alignment: .leading,
+                    spacing: spacing
+                ) {
+                    photoButtons
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .fullScreenCover(item: $selection) { selection in
@@ -668,7 +723,7 @@ private struct PostPhotoGrid: View {
     private var photoButtons: some View {
         ForEach(Array(visiblePaths.enumerated()), id: \.offset) { index, path in
             photoButton(path: path, index: index)
-                .frame(width: thumbnailSize, height: thumbnailSize)
+                .frame(width: thumbnailHeight, height: thumbnailHeight)
         }
     }
 
@@ -687,9 +742,11 @@ private struct PostPhoto: View {
     let path: String
 
     var body: some View {
-        PostPhotoContent(path: path, contentMode: .fill)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
+        GeometryReader { proxy in
+            PostPhotoContent(path: path, contentMode: .fill)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .clipped()
+        }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .accessibilityLabel("Post photo")
     }

@@ -22,7 +22,14 @@ struct AuthSession: Codable, Equatable {
     let expiresAt: Date
     let user: AuthUser
 
-    private enum CodingKeys: String, CodingKey { case accessToken = "access_token"; case refreshToken = "refresh_token"; case expiresIn = "expires_in"; case user }
+    private enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
+        case expiresAt = "expires_at"
+        case storedExpiresAt = "stored_expires_at"
+        case user
+    }
 
     init(accessToken: String, refreshToken: String, expiresAt: Date, user: AuthUser) {
         self.accessToken = accessToken; self.refreshToken = refreshToken; self.expiresAt = expiresAt; self.user = user
@@ -32,7 +39,15 @@ struct AuthSession: Codable, Equatable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         accessToken = try values.decode(String.self, forKey: .accessToken)
         refreshToken = try values.decode(String.self, forKey: .refreshToken)
-        expiresAt = Date().addingTimeInterval(try values.decode(TimeInterval.self, forKey: .expiresIn))
+        // Auth responses use a relative lifetime, while Keychain persistence uses
+        // an absolute timestamp. Never recreate an expiry from a saved duration.
+        if let storedExpiry = try values.decodeIfPresent(TimeInterval.self, forKey: .storedExpiresAt) {
+            expiresAt = Date(timeIntervalSince1970: storedExpiry)
+        } else if let serverExpiry = try values.decodeIfPresent(TimeInterval.self, forKey: .expiresAt) {
+            expiresAt = Date(timeIntervalSince1970: serverExpiry)
+        } else {
+            expiresAt = Date().addingTimeInterval(try values.decode(TimeInterval.self, forKey: .expiresIn))
+        }
         user = try values.decode(AuthUser.self, forKey: .user)
     }
 
@@ -40,7 +55,7 @@ struct AuthSession: Codable, Equatable {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(accessToken, forKey: .accessToken)
         try values.encode(refreshToken, forKey: .refreshToken)
-        try values.encode(max(0, expiresAt.timeIntervalSinceNow), forKey: .expiresIn)
+        try values.encode(expiresAt.timeIntervalSince1970, forKey: .storedExpiresAt)
         try values.encode(user, forKey: .user)
     }
 }
@@ -288,6 +303,24 @@ final class AuthenticationStore: ObservableObject {
         refreshTask?.cancel(); sessionStore.clear(); session = nil; pendingVerifiedSession = nil; clearPending(); isSkippingForNow = false
     }
 
+    /// Returns the current session, refreshing it before foreground work when it
+    /// is close to expiry. A failed refresh clears the unusable local session.
+    func refreshIfNeeded(within safetyWindow: TimeInterval = 300) async -> AuthSession? {
+        guard let active = session else { return nil }
+        guard active.expiresAt.timeIntervalSinceNow <= safetyWindow else { return active }
+        guard let client else { sessionStore.clear(); session = nil; return nil }
+        do {
+            let refreshed = try await client.refresh(active.refreshToken)
+            completeAuthentication(refreshed)
+            return refreshed
+        } catch {
+            refreshTask?.cancel()
+            sessionStore.clear()
+            session = nil
+            return nil
+        }
+    }
+
     private static func normalizedEmail(_ value: String) throws -> String {
         let value = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard value.contains("@"), value.split(separator: "@").last?.contains(".") == true else { throw AuthenticationError.invalidEmail }
@@ -318,14 +351,13 @@ final class AuthenticationStore: ObservableObject {
 
     private func restore(_ saved: AuthSession) async {
         defer { isRestoring = false }
-        guard saved.expiresAt.timeIntervalSinceNow < 60 else { scheduleRefresh(for: saved); return }
-        guard let client else { sessionStore.clear(); session = nil; return }
-        do { completeAuthentication(try await client.refresh(saved.refreshToken)) } catch { sessionStore.clear(); session = nil }
+        guard saved.expiresAt.timeIntervalSinceNow <= 300 else { scheduleRefresh(for: saved); return }
+        _ = await refreshIfNeeded()
     }
 
     private func scheduleRefresh(for value: AuthSession) {
         refreshTask?.cancel()
-        let delay = max(0, value.expiresAt.timeIntervalSinceNow - 60)
+        let delay = max(0, value.expiresAt.timeIntervalSinceNow - 300)
         refreshTask = Task { [weak self] in
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             guard !Task.isCancelled else { return }
@@ -340,6 +372,12 @@ private final class SecureSessionStore {
         let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account, kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        // Sessions written before absolute expiry storage cannot be trusted after
+        // a relaunch; require a fresh sign-in instead of sending a stale JWT.
+        guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any], payload["stored_expires_at"] != nil else {
+            clear()
+            return nil
+        }
         return try? JSONDecoder().decode(AuthSession.self, from: data)
     }
     func save(_ value: AuthSession) {

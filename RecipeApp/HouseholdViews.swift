@@ -268,6 +268,7 @@ struct HouseholdRecipeDetailView: View {
 
 struct HouseholdRecipeEditor: View {
     @EnvironmentObject private var householdStore: HouseholdStore
+    @EnvironmentObject private var feedStore: FeedStore
     @Environment(\.dismiss) private var dismiss
     let item: HouseholdRecipe?
     @State private var title: String
@@ -343,21 +344,18 @@ struct HouseholdRecipeEditor: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .buttonStyle(.plain)
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text)
-                    .frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle())
-            }
-            .padding(14)
+            CircularBackButton(action: { dismiss() })
+                .padding(14)
         }
     }
 
     private var recipeForm: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(spacing: 8) {
-                Circle().fill(AppTheme.primary.opacity(0.35)).frame(width: 25, height: 25)
+                InitialsAvatar(profile: authorProfile, size: 32)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(author.isEmpty ? "Author" : author).font(.custom("Inter", size: 12))
-                    Text("@author").font(.custom("Inter", size: 10)).foregroundStyle(AppTheme.label)
+                    Text(resolvedAuthor).font(.subheadline.weight(.semibold))
+                    Text("@\(resolvedAuthor)").font(.caption).foregroundStyle(AppTheme.label)
                 }
             }
             TextField("Add Title", text: $title).figmaInput().padding(.bottom, 8)
@@ -407,7 +405,7 @@ struct HouseholdRecipeEditor: View {
             id: item?.id ?? UUID(),
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             summary: summary,
-            author: author.isEmpty ? "Me" : author,
+            author: resolvedAuthor,
             servings: servings,
             tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
             ingredients: ingredients.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
@@ -423,6 +421,23 @@ struct HouseholdRecipeEditor: View {
             catch { errorMessage = error.localizedDescription }
             isSaving = false
         }
+    }
+
+    private var currentUserName: String { feedStore.currentProfile?.username ?? "Me" }
+    private var resolvedAuthor: String {
+        let savedAuthor = author.trimmingCharacters(in: .whitespacesAndNewlines)
+        if item == nil || savedAuthor.isEmpty { return currentUserName }
+        if savedAuthor.caseInsensitiveCompare("Me") == .orderedSame,
+           let creatorID = item?.createdBy,
+           let creator = householdStore.members.first(where: { $0.profile.id == creatorID }) {
+            return creator.profile.username
+        }
+        return savedAuthor.caseInsensitiveCompare("Me") == .orderedSame ? currentUserName : savedAuthor
+    }
+    private var authorProfile: UserProfile {
+        if let member = householdStore.members.first(where: { $0.profile.username == resolvedAuthor }) { return member.profile }
+        if let currentProfile = feedStore.currentProfile, currentProfile.username == resolvedAuthor { return currentProfile }
+        return UserProfile(id: UUID(), displayName: resolvedAuthor, username: resolvedAuthor)
     }
 }
 
@@ -513,11 +528,8 @@ struct HouseholdPlanEditor: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .buttonStyle(.plain)
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left").font(.caption.weight(.bold)).foregroundStyle(AppTheme.text)
-                    .frame(width: 28, height: 28).background(AppTheme.background.opacity(0.94)).clipShape(Circle())
-            }
-            .padding(14)
+            CircularBackButton(action: { dismiss() })
+                .padding(14)
         }
     }
 
