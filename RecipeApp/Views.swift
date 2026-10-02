@@ -393,10 +393,6 @@ struct ProfileView: View {
     @EnvironmentObject private var store: MealStore
     @EnvironmentObject private var feedStore: FeedStore
     @EnvironmentObject private var householdStore: HouseholdStore
-    @EnvironmentObject private var authentication: AuthenticationStore
-    @State private var showAccountOptions = false
-    @State private var showDeleteAccount = false
-    @State private var showPrivacySettings = false
     @State private var selectedPostID: UUID?
 
     private var featuredRecipes: [Recipe] {
@@ -540,24 +536,312 @@ struct ProfileView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 NavigationLink { MyFavouritesView() } label: { Image(systemName: "star") }
                     .accessibilityLabel("My favourites")
-                Button { showPrivacySettings = true } label: { Image(systemName: "lock") }
-                    .accessibilityLabel("Privacy settings")
-                Button { showAccountOptions = true } label: { Image(systemName: "gearshape") }
-                    .accessibilityLabel("Account settings")
+                NavigationLink { ProfileSettingsView() } label: { Image(systemName: "gearshape") }
+                    .accessibilityLabel("Profile settings")
             }
         }
         .navigationDestination(item: $selectedPostID) { postID in
             PostDetailView(postID: postID)
         }
         }
-        .confirmationDialog("Account", isPresented: $showAccountOptions, titleVisibility: .visible) {
-            Button("Sign out") { authentication.signOut() }
-            Button("Delete account", role: .destructive) { showDeleteAccount = true }
-        } message: {
-            Text("Manage your Taverley account.")
+    }
+}
+
+private enum MeasurementPreference: String, CaseIterable, Identifiable {
+    case metric = "Metric"
+    case imperial = "Imperial"
+    var id: String { rawValue }
+}
+
+private struct ProfileSettingsView: View {
+    @EnvironmentObject private var authentication: AuthenticationStore
+    @EnvironmentObject private var feedStore: FeedStore
+    @AppStorage("measurement-preference") private var measurement = MeasurementPreference.metric.rawValue
+    @State private var displayName = ""
+    @State private var savedDisplayName = ""
+    @State private var isPrivate = false
+    @State private var isSavingName = false
+    @State private var isSavingPrivacy = false
+    @State private var hasLoaded = false
+    @State private var showBugReport = false
+    @State private var showDeleteAccount = false
+    @State private var showSignOutConfirmation = false
+    @State private var errorMessage: String?
+    @FocusState private var isDisplayNameFocused: Bool
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                settingsCard("Preferences") {
+                    settingRow("Display Name") {
+                        HStack(spacing: 8) {
+                            TextField("Display name", text: $displayName)
+                                .multilineTextAlignment(.leading)
+                                .textInputAutocapitalization(.words)
+                                .autocorrectionDisabled()
+                                .submitLabel(.done)
+                                .focused($isDisplayNameFocused)
+                                .onSubmit { saveDisplayName() }
+                            if isSavingName { ProgressView().controlSize(.small) }
+                        }
+                        .settingsValueStyle()
+                    }
+
+                    settingRow("Private Account") {
+                        Toggle("Private Account", isOn: $isPrivate)
+                            .labelsHidden()
+                            .tint(AppTheme.accent)
+                            .disabled(isSavingPrivacy || !hasLoaded)
+                    }
+
+                    settingRow("Measuring Unit") {
+                        Picker("Measuring Unit", selection: $measurement) {
+                            ForEach(MeasurementPreference.allCases) { preference in
+                                Text(preference.rawValue).tag(preference.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .tint(AppTheme.textSecondary)
+                        .settingsValueStyle()
+                    }
+                }
+
+                settingsCard("Feedback") {
+                    Button { showBugReport = true } label: {
+                        HStack {
+                            Text("Bug Report")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.textSecondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens a form to submit a bug report")
+                }
+
+                settingsCard("About") {
+                    settingRow("Version") {
+                        Text(version).settingsValueStyle()
+                    }
+                }
+
+                Button("Sign Out") { showSignOutConfirmation = true }
+                    .settingsActionStyle(foreground: AppTheme.accent)
+                    .confirmationDialog("Sign out of Taverley?", isPresented: $showSignOutConfirmation, titleVisibility: .visible) {
+                        Button("Sign Out", role: .destructive) { authentication.signOut() }
+                        Button("Cancel", role: .cancel) { }
+                    }
+
+                Button("Delete Account", role: .destructive) { showDeleteAccount = true }
+                    .settingsActionStyle(foreground: AppTheme.destructive)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 18)
         }
+        .scrollIndicators(.hidden)
+        .background(AppTheme.background.ignoresSafeArea())
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(AppTheme.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .task {
+            guard !hasLoaded else { return }
+            let profile = feedStore.currentProfile
+            displayName = profile?.displayName ?? ""
+            savedDisplayName = displayName
+            isPrivate = profile?.isPrivate ?? false
+            hasLoaded = true
+        }
+        .onChange(of: isDisplayNameFocused) { _, focused in
+            if !focused { saveDisplayName() }
+        }
+        .onChange(of: isPrivate) { _, newValue in
+            if hasLoaded { savePrivacy(newValue) }
+        }
+        .sheet(isPresented: $showBugReport) { BugReportView() }
         .sheet(isPresented: $showDeleteAccount) { DeleteAccountView() }
-        .sheet(isPresented: $showPrivacySettings) { PrivacySettingsView() }
+        .alert("Couldn’t save settings", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "Please try again.")
+        }
+    }
+
+    private func settingsCard<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.title2.weight(.bold))
+                .foregroundStyle(AppTheme.textPrimary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(AppTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func settingRow<Content: View>(_ title: String, @ViewBuilder value: () -> Content) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.body)
+                .foregroundStyle(AppTheme.textPrimary)
+            Spacer(minLength: 8)
+            value().frame(maxWidth: 150, alignment: .trailing)
+        }
+        .frame(minHeight: 36)
+    }
+
+    private func saveDisplayName() {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isSavingName, trimmed != savedDisplayName else { return }
+        guard !trimmed.isEmpty else {
+            displayName = savedDisplayName
+            return
+        }
+        Task {
+            isSavingName = true
+            do {
+                try await feedStore.setDisplayName(trimmed)
+                displayName = feedStore.currentProfile?.displayName ?? trimmed
+                savedDisplayName = displayName
+            } catch {
+                displayName = savedDisplayName
+                errorMessage = error.localizedDescription
+            }
+            isSavingName = false
+        }
+    }
+
+    private func savePrivacy(_ value: Bool) {
+        guard !isSavingPrivacy else { return }
+        Task {
+            isSavingPrivacy = true
+            do {
+                try await feedStore.setProfilePrivacy(isPrivate: value)
+            } catch {
+                isPrivate = !value
+                errorMessage = error.localizedDescription
+            }
+            isSavingPrivacy = false
+        }
+    }
+}
+
+private struct SettingsValueStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.subheadline)
+            .foregroundStyle(AppTheme.textSecondary)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.elevatedSurface)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(AppTheme.separator, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct SettingsActionStyle: ViewModifier {
+    let foreground: Color
+    func body(content: Content) -> some View {
+        content
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(foreground)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 52)
+            .background(AppTheme.elevatedSurface)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private extension View {
+    func settingsValueStyle() -> some View { modifier(SettingsValueStyle()) }
+    func settingsActionStyle(foreground: Color) -> some View { modifier(SettingsActionStyle(foreground: foreground)) }
+}
+
+private struct BugReportView: View {
+    @EnvironmentObject private var feedStore: FeedStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var subject = ""
+    @State private var details = ""
+    @State private var isSubmitting = false
+    @State private var errorMessage: String?
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+    }
+    private var buildNumber: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+    }
+    private var canSubmit: Bool {
+        !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && details.trimmingCharacters(in: .whitespacesAndNewlines).count >= 10
+            && !isSubmitting
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("What went wrong?") {
+                    TextField("Short title", text: $subject)
+                    TextEditor(text: $details)
+                        .frame(minHeight: 150)
+                        .overlay(alignment: .topLeading) {
+                            if details.isEmpty {
+                                Text("Tell us what happened and how to reproduce it.")
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.top, 8)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                }
+                Section {
+                    Text("App version \(version) (\(buildNumber)) and your iOS version will be included automatically.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if let errorMessage {
+                    Section { Text(errorMessage).foregroundStyle(AppTheme.destructive) }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(AppTheme.background)
+            .navigationTitle("Bug Report")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.disabled(isSubmitting)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Submit") { submit() }.disabled(!canSubmit)
+                }
+            }
+            .interactiveDismissDisabled(isSubmitting)
+        }
+    }
+
+    private func submit() {
+        Task {
+            isSubmitting = true
+            errorMessage = nil
+            do {
+                try await feedStore.submitBugReport(subject: subject, details: details, appVersion: version, buildNumber: buildNumber)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+                isSubmitting = false
+            }
+        }
     }
 }
 

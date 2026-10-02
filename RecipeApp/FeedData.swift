@@ -36,6 +36,25 @@ extension SupabaseDataClient {
         return saved
     }
 
+    func submitBugReport(subject: String, details: String, appVersion: String, buildNumber: String, accessToken: String) async throws {
+        let url = configuration.url.appending(path: "rest/v1/bug_reports")
+        var request = authorizedRequest(url: url, accessToken: accessToken)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        request.httpBody = try JSONEncoder().encode([
+            BugReportInsertRecord(
+                subject: subject,
+                details: details,
+                appVersion: appVersion,
+                buildNumber: buildNumber,
+                systemVersion: ProcessInfo.processInfo.operatingSystemVersionString
+            )
+        ])
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+    }
+
     func loadFeed(for userID: UUID, accessToken: String) async throws -> FeedPayload {
         let posts = try await fetchFollowingPosts(accessToken: accessToken)
         let recipeIDs = Array(Set(posts.compactMap(\.recipeID)))
@@ -387,14 +406,29 @@ private struct ProfileRecord: Codable {
 
     init(_ profile: UserProfile) {
         id = profile.id
-        displayName = profile.username
+        displayName = profile.displayName
         username = profile.username
         isPrivate = profile.isPrivate
     }
 
     var profile: UserProfile? {
         guard let username, !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return UserProfile(id: id, displayName: username, username: username, isPrivate: isPrivate ?? false)
+        return UserProfile(id: id, displayName: displayName, username: username, isPrivate: isPrivate ?? false)
+    }
+}
+
+private struct BugReportInsertRecord: Encodable {
+    let subject: String
+    let details: String
+    let appVersion: String
+    let buildNumber: String
+    let systemVersion: String
+
+    enum CodingKeys: String, CodingKey {
+        case subject, details
+        case appVersion = "app_version"
+        case buildNumber = "build_number"
+        case systemVersion = "system_version"
     }
 }
 
@@ -672,12 +706,42 @@ final class FeedStore: ObservableObject {
         currentProfile = try await client.saveProfile(profile, accessToken: session.accessToken)
     }
 
+    func setDisplayName(_ value: String) async throws {
+        guard let client, let session, var profile = currentProfile else {
+            throw SyncError.service(message: "Complete your profile before changing your display name.")
+        }
+        let displayName = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (1...60).contains(displayName.count) else {
+            throw SyncError.service(message: "Display name must be between 1 and 60 characters.")
+        }
+        profile.displayName = displayName
+        currentProfile = try await client.saveProfile(profile, accessToken: session.accessToken)
+    }
+
     func setProfilePrivacy(isPrivate: Bool) async throws {
         guard let client, let session, var profile = currentProfile else {
             throw SyncError.service(message: "Complete your profile before changing privacy.")
         }
         profile.isPrivate = isPrivate
         currentProfile = try await client.saveProfile(profile, accessToken: session.accessToken)
+    }
+
+    func submitBugReport(subject: String, details: String, appVersion: String, buildNumber: String) async throws {
+        guard let client, let session else {
+            throw SyncError.service(message: "Sign in to submit a bug report.")
+        }
+        let subject = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        let details = details.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !subject.isEmpty, details.count >= 10 else {
+            throw SyncError.service(message: "Add a title and at least 10 characters of detail.")
+        }
+        try await client.submitBugReport(
+            subject: subject,
+            details: details,
+            appVersion: appVersion,
+            buildNumber: buildNumber,
+            accessToken: session.accessToken
+        )
     }
 
     func publish(title: String, body: String, recipe: Recipe?, photos: [Data]) async throws {
