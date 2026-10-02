@@ -1176,11 +1176,11 @@ private struct ProfileRecipesView: View {
             AppTheme.background.ignoresSafeArea()
 
             if recipes.isEmpty {
-                ContentUnavailableView(
-                    "No recipes yet",
-                    systemImage: "book.closed",
-                    description: Text("Your recipes will appear here.")
-                )
+                ContentUnavailableView {
+                    NavigationEmptyStateLabel(title: "No recipes yet", imageName: "FigmaNavDocument")
+                } description: {
+                    Text("Your recipes will appear here.")
+                }
             } else {
                 ScrollView {
                     LazyVGrid(
@@ -1380,7 +1380,18 @@ struct RecipeLibraryView: View {
 
                     ScrollView {
                         if filtered.isEmpty {
-                            ContentUnavailableView(query.isEmpty && selectedTags.isEmpty && selectedAuthors.isEmpty ? "No recipes yet" : "No matching recipes", systemImage: "book.closed", description: Text(query.isEmpty && selectedTags.isEmpty && selectedAuthors.isEmpty ? "Create your first recipe to start planning meals." : "Try a different search or filter."))
+                            ContentUnavailableView {
+                                NavigationEmptyStateLabel(title: query.isEmpty && selectedTags.isEmpty && selectedAuthors.isEmpty ? "No recipes yet" : "No matching recipes", imageName: "FigmaNavDocument")
+                            } description: {
+                                Text(query.isEmpty && selectedTags.isEmpty && selectedAuthors.isEmpty ? "Create your first recipe to start planning meals." : "Try a different search or filter.")
+                            } actions: {
+                                if query.isEmpty && selectedTags.isEmpty && selectedAuthors.isEmpty {
+                                    Button("Create Recipe") { showCreate = true }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(AppTheme.primary)
+                                        .foregroundStyle(.black)
+                                }
+                            }
                                 .frame(maxWidth: .infinity, minHeight: 360)
                         } else {
                             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
@@ -1711,7 +1722,18 @@ struct MealPlanListView: View {
 
                     ScrollView {
                         if filteredPlans.isEmpty {
-                            ContentUnavailableView(query.isEmpty ? "No meal plans yet" : "No matching meal plans", systemImage: "folder", description: Text(query.isEmpty ? "Create a plan to make weeknight cooking easier." : "Try a different search or label."))
+                            ContentUnavailableView {
+                                NavigationEmptyStateLabel(title: query.isEmpty ? "No meal plans yet" : "No matching meal plans", imageName: "FigmaNavFolder")
+                            } description: {
+                                Text(query.isEmpty ? "Create a plan to make weeknight cooking easier." : "Try a different search or tag.")
+                            } actions: {
+                                if query.isEmpty && selectedTags.isEmpty {
+                                    Button("Create Plan") { showCreate = true }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(AppTheme.primary)
+                                        .foregroundStyle(.black)
+                                }
+                            }
                                 .frame(maxWidth: .infinity, minHeight: 360)
                         } else {
                             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {

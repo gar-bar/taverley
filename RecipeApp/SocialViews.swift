@@ -119,6 +119,56 @@ struct SocialPersonRow: View {
     }
 }
 
+struct PeopleSearchView: View {
+    @EnvironmentObject private var socialStore: SocialStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppTheme.background.ignoresSafeArea()
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ContentUnavailableView(
+                        "Find people",
+                        systemImage: "person.2",
+                        description: Text("Search by username to follow people and see their posts in your feed.")
+                    )
+                } else if socialStore.isSearching {
+                    ProgressView("Searching people…").tint(AppTheme.primary)
+                } else if let error = socialStore.searchError {
+                    VStack(spacing: 14) {
+                        ContentUnavailableView("Couldn’t search people", systemImage: "wifi.exclamationmark", description: Text(error))
+                        Button("Try again") { Task { await socialStore.search(query) } }
+                            .buttonStyle(.borderedProminent)
+                            .tint(AppTheme.primary)
+                    }
+                } else if socialStore.searchResults.isEmpty {
+                    ContentUnavailableView("No people found", systemImage: "person.crop.circle.badge.questionmark", description: Text("Try another username."))
+                } else {
+                    List {
+                        ForEach(socialStore.searchResults) { person in
+                            SocialPersonRow(summary: person)
+                                .listRowBackground(AppTheme.background)
+                                .listRowSeparatorTint(AppTheme.border)
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                }
+            }
+            .navigationTitle("Find People")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Search usernames")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            .task(id: query) {
+                do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+                await socialStore.search(query)
+            }
+        }
+    }
+}
+
 struct RelationshipListView: View {
     @EnvironmentObject private var socialStore: SocialStore
     let profileID: UUID

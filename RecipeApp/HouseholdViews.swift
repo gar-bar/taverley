@@ -251,11 +251,11 @@ struct HouseholdRecipesView: View {
                     HStack { Image(systemName: "magnifyingglass"); TextField("Search shared recipes", text: $query) }.figmaInput()
                     RecipeTagFilter(selections: $selectedTags, options: tags).frame(maxWidth: .infinity, alignment: .leading)
                     if recipes.isEmpty {
-                        ContentUnavailableView(
-                            query.isEmpty && selectedTags.isEmpty ? "No shared recipes yet" : "No matching recipes",
-                            systemImage: "book.closed",
-                            description: Text(query.isEmpty && selectedTags.isEmpty ? "Create or share a recipe with your household." : "Try a different search or filter.")
-                        )
+                        ContentUnavailableView {
+                            NavigationEmptyStateLabel(title: query.isEmpty && selectedTags.isEmpty ? "No shared recipes yet" : "No matching recipes", imageName: "FigmaNavDocument")
+                        } description: {
+                            Text(query.isEmpty && selectedTags.isEmpty ? "Create or share a recipe with your household." : "Try a different search or filter.")
+                        }
                         .frame(maxWidth: .infinity, minHeight: 300)
                     } else {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {

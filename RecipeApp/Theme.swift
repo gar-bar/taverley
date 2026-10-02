@@ -39,6 +39,21 @@ struct Tag: View {
     var body: some View { Text(title).font(.caption2.weight(.medium)).foregroundStyle(AppTheme.textPrimary).padding(.horizontal, AppTheme.Spacing.xs).padding(.vertical, AppTheme.Spacing.xxs).background(AppTheme.input).clipShape(Capsule()) }
 }
 
+struct NavigationEmptyStateLabel: View {
+    let title: String
+    let imageName: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(imageName)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 48, height: 48)
+            Text(title).font(.title3.weight(.semibold))
+        }
+    }
+}
+
 struct TagPreview: View {
     let tags: [String]
 

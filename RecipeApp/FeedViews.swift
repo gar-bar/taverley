@@ -9,6 +9,7 @@ struct FeedView: View {
     @State private var query = ""
     @State private var activeSheet: FeedSheet?
     @State private var showSignInPrompt = false
+    @State private var showPeopleSearch = false
     @State private var composeAfterProfileSetup = false
     @State private var selectedPostID: UUID?
     @FocusState private var isSearchFocused: Bool
@@ -72,6 +73,7 @@ struct FeedView: View {
                     PostComposerView()
                 }
             }
+            .sheet(isPresented: $showPeopleSearch) { PeopleSearchView() }
             .alert("Sign in to post", isPresented: $showSignInPrompt) {
                 Button("Not now", role: .cancel) { }
                 Button("Sign in") { authentication.isSkippingForNow = false }
@@ -174,8 +176,9 @@ struct FeedView: View {
                             } description: {
                                 Text("Follow people to see their posts here. Your own posts will appear too.")
                             } actions: {
-                                Button("Find People") { isSearchFocused = true }
+                                Button("Find People") { showPeopleSearch = true }
                                     .buttonStyle(.borderedProminent).tint(AppTheme.primary)
+                                    .foregroundStyle(.black)
                             }
                         } else {
                             ContentUnavailableView(
