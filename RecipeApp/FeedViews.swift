@@ -35,10 +35,7 @@ struct FeedView: View {
             .toolbar {
                 if authentication.session != nil {
                     ToolbarItem(placement: .topBarTrailing) {
-                        FollowRequestNotificationButton()
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        HouseholdNotificationButton()
+                        NotificationsButton()
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -1127,18 +1124,13 @@ private struct FeedRecipePicker: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var selectedRecipe: Recipe?
     @State private var query = ""
-    @State private var selectedTag: String?
+    @State private var selectedTags: Set<String> = []
 
-    private var tags: [String] { Array(Set(mealStore.recipes.flatMap(\.tags))).sorted() }
+    private var tags: [String] { RecipeTagPolicy.catalog(from: mealStore.recipes) }
 
     private var filteredRecipes: [Recipe] {
         mealStore.recipes.filter { recipe in
-            let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            let matchesQuery = query.isEmpty
-                || recipe.title.localizedCaseInsensitiveContains(query)
-                || recipe.author.localizedCaseInsensitiveContains(query)
-                || recipe.ingredients.contains { $0.display.localizedCaseInsensitiveContains(query) }
-            return matchesQuery && (selectedTag == nil || recipe.tags.contains(selectedTag!))
+            RecipeTagPolicy.matches(recipe, query: query, selectedTags: selectedTags)
         }
     }
 
@@ -1176,22 +1168,9 @@ private struct FeedRecipePicker: View {
                         .background(AppTheme.input)
                         .clipShape(Capsule())
 
-                        Menu {
-                            Button("All Labels") { selectedTag = nil }
-                            ForEach(tags, id: \.self) { tag in Button(tag) { selectedTag = tag } }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(selectedTag ?? "Label")
-                                Image(systemName: "chevron.down").font(.caption2)
-                            }
-                            .font(.custom("Inter", size: 14))
-                            .foregroundStyle(AppTheme.label)
-                            .padding(.horizontal, 12)
-                            .frame(height: 34)
-                            .background(AppTheme.input)
-                            .clipShape(Capsule())
-                        }
                     }
+                    RecipeTagFilter(selections: $selectedTags, options: tags)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     ScrollView {
                         LazyVStack(spacing: 9) {

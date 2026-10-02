@@ -1244,17 +1244,7 @@ private struct ProfileRecipeCard: View {
                     .font(.custom("Inter", size: 14))
                     .foregroundStyle(AppTheme.label)
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    ForEach(recipe.tags.prefix(2), id: \.self) { tag in
-                        Text(tag)
-                            .font(.custom("Inter", size: 12).weight(.medium))
-                            .foregroundStyle(AppTheme.text)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
-                            .background(AppTheme.primary.opacity(0.5))
-                            .clipShape(Capsule())
-                    }
-                }
+                if !recipe.tags.isEmpty { TagPreview(tags: recipe.tags) }
             }
             .frame(width: 162, alignment: .leading)
         }
@@ -1353,12 +1343,11 @@ struct MultiSelectFilterMenu: View {
 struct RecipeLibraryView: View {
     @EnvironmentObject private var store: MealStore
     @State private var query = ""; @State private var selectedTags: Set<String> = []; @State private var selectedAuthors: Set<String> = []; @State private var showCreate = false; @State private var newestFirst = true
-    private var tags: [String] { Array(Set(store.recipes.flatMap(\.tags))).sorted() }
+    private var tags: [String] { RecipeTagPolicy.catalog(from: store.recipes) }
     private var authors: [String] { Array(Set(store.recipes.map(\.author))).sorted() }
     private var filtered: [Recipe] {
         store.recipes.filter { recipe in
-            (query.isEmpty || recipe.title.localizedCaseInsensitiveContains(query) || recipe.ingredients.contains { $0.name.localizedCaseInsensitiveContains(query) } || recipe.author.localizedCaseInsensitiveContains(query))
-                && (selectedTags.isEmpty || !selectedTags.isDisjoint(with: Set(recipe.tags)))
+            RecipeTagPolicy.matches(recipe, query: query, selectedTags: selectedTags)
                 && (selectedAuthors.isEmpty || selectedAuthors.contains(recipe.author))
         }.sorted { newestFirst ? $0.createdAt > $1.createdAt : $0.createdAt < $1.createdAt }
     }
@@ -1367,9 +1356,23 @@ struct RecipeLibraryView: View {
             ZStack {
                 AppTheme.background.ignoresSafeArea()
                 VStack(spacing: 0) {
-                    HStack(spacing: AppTheme.Spacing.xs) {
-                        MultiSelectFilterMenu(title: "Author", selections: $selectedAuthors, options: authors)
-                        MultiSelectFilterMenu(title: "Label", selections: $selectedTags, options: tags)
+                    VStack(alignment: .leading, spacing: AppTheme.Spacing.xs) {
+                        HStack(spacing: AppTheme.Spacing.xs) {
+                            RecipeTagFilter(title: "Author", selections: $selectedAuthors, options: authors, showsActiveSelections: false)
+                            RecipeTagFilter(selections: $selectedTags, options: tags, showsActiveSelections: false)
+                        }
+                        if !selectedAuthors.isEmpty || !selectedTags.isEmpty {
+                            TagFlowLayout {
+                                ForEach(selectedAuthors.sorted(), id: \.self) { author in
+                                    RemovableTagChip(title: author) { selectedAuthors.remove(author) }
+                                }
+                                ForEach(selectedTags.sorted(), id: \.self) { tag in
+                                    RemovableTagChip(title: tag) { selectedTags.remove(tag) }
+                                }
+                                Button("Clear all") { selectedAuthors.removeAll(); selectedTags.removeAll() }
+                                    .font(.caption.weight(.semibold)).foregroundStyle(AppTheme.primary)
+                            }
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, AppTheme.Spacing.md)
@@ -1377,7 +1380,7 @@ struct RecipeLibraryView: View {
 
                     ScrollView {
                         if filtered.isEmpty {
-                            ContentUnavailableView(query.isEmpty ? "No recipes yet" : "No matching recipes", systemImage: "book.closed", description: Text(query.isEmpty ? "Create your first recipe to start planning meals." : "Try a different search or filter."))
+                            ContentUnavailableView(query.isEmpty && selectedTags.isEmpty && selectedAuthors.isEmpty ? "No recipes yet" : "No matching recipes", systemImage: "book.closed", description: Text(query.isEmpty && selectedTags.isEmpty && selectedAuthors.isEmpty ? "Create your first recipe to start planning meals." : "Try a different search or filter."))
                                 .frame(maxWidth: .infinity, minHeight: 360)
                         } else {
                             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
@@ -1418,7 +1421,7 @@ struct RecipeCard: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 Text(recipe.title).font(.headline).foregroundStyle(AppTheme.text).lineLimit(1)
                 Text("@\(recipe.author)").font(.caption).foregroundStyle(AppTheme.label)
-                if !recipe.tags.isEmpty { HStack(spacing: 4) { ForEach(recipe.tags.prefix(2), id: \.self) { Tag(title: $0) } }.lineLimit(1) }
+                if !recipe.tags.isEmpty { TagPreview(tags: recipe.tags) }
             }
         }
         .frame(maxWidth: .infinity)
@@ -1445,6 +1448,9 @@ struct RecipeDetailView: View {
             }
             Text(displayedRecipe.title).font(AppTheme.display(.title)).foregroundStyle(AppTheme.text)
             Text(displayedRecipe.summary).font(.body).foregroundStyle(AppTheme.text.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
+            if !displayedRecipe.tags.isEmpty {
+                TagFlowLayout { ForEach(displayedRecipe.tags, id: \.self) { Tag(title: $0) } }
+            }
             Accordion(title: "Ingredients", isOpen: $ingredientsOpen) { Picker("Scale", selection: $scale) { Text("0.5×").tag(0.5); Text("1×").tag(1.0); Text("2×").tag(2.0) }.pickerStyle(.segmented); ForEach(displayedRecipe.ingredients) { item in Text("• \((item.quantity * scale).formatted(.number.precision(.fractionLength(0...2)))) \(item.unit) \(item.name)").font(.body).foregroundStyle(AppTheme.text).frame(maxWidth: .infinity, alignment: .leading) } }
             Accordion(title: "Instructions", isOpen: $stepsOpen) { ForEach(Array(displayedRecipe.steps.enumerated()), id: \.element.id) { index, step in Text("\(index + 1). \(step.text)").font(.body).foregroundStyle(AppTheme.text).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 4) } }
             Accordion(title: "Nutrition Facts", isOpen: $nutritionOpen) { ForEach(displayedRecipe.nutrition) { fact in HStack { Text(fact.name); Spacer(); Text("\(fact.amount.formatted()) \(fact.unit)") }.font(.body).foregroundStyle(AppTheme.text) } }
@@ -1483,7 +1489,7 @@ struct Accordion<Content: View>: View { let title: String; @Binding var isOpen: 
 struct RecipeEditor: View {
     @EnvironmentObject private var store: MealStore; @EnvironmentObject private var feedStore: FeedStore; @Environment(\.dismiss) private var dismiss
     let recipe: Recipe?
-    @State private var title: String; @State private var summary: String; @State private var author: String; @State private var servings: Int; @State private var tags: String; @State private var ingredients: [Ingredient]; @State private var steps: [RecipeStep]; @State private var nutrition: [NutritionFact]; @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?; @State private var prepMinutes: Int; @State private var cookMinutes: Int; @State private var validationMessage: String?
+    @State private var title: String; @State private var summary: String; @State private var author: String; @State private var servings: Int; @State private var tags: [String]; @State private var ingredients: [Ingredient]; @State private var steps: [RecipeStep]; @State private var nutrition: [NutritionFact]; @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?; @State private var prepMinutes: Int; @State private var cookMinutes: Int; @State private var validationMessage: String?
     @FocusState private var focusedField: RecipeEditorField?
 
     init(recipe: Recipe? = nil) {
@@ -1492,7 +1498,7 @@ struct RecipeEditor: View {
         _summary = State(initialValue: recipe?.summary ?? "")
         _author = State(initialValue: recipe?.author ?? "")
         _servings = State(initialValue: recipe?.servings ?? 4)
-        _tags = State(initialValue: recipe?.tags.joined(separator: ", ") ?? "")
+        _tags = State(initialValue: RecipeTagPolicy.normalized(recipe?.tags ?? []))
         _ingredients = State(initialValue: recipe?.ingredients ?? [Ingredient(name: "", quantity: 1, unit: "cups")])
         _steps = State(initialValue: recipe?.steps ?? [RecipeStep(text: "")])
         _nutrition = State(initialValue: recipe?.nutrition ?? [])
@@ -1560,7 +1566,8 @@ struct RecipeEditor: View {
             }
             TextField("Add Title", text: $title).figmaInput().focused($focusedField, equals: .title).onChange(of: title) { retainFocus(.title) }.padding(.bottom, 8)
             TextField("Add Description", text: $summary, axis: .vertical).lineLimit(3...5).figmaInput().focused($focusedField, equals: .summary).onChange(of: summary) { retainFocus(.summary) }.padding(.bottom, 8)
-            HStack { Text("Serves \(servings)").foregroundStyle(AppTheme.label); Stepper("", value: $servings, in: 1...30).labelsHidden(); TextField("Tags", text: $tags).figmaInput().focused($focusedField, equals: .tags).onChange(of: tags) { retainFocus(.tags) } }.padding(.bottom, 8)
+            HStack { Text("Serves \(servings)").foregroundStyle(AppTheme.label); Stepper("", value: $servings, in: 1...30).labelsHidden() }.padding(.bottom, 8)
+            RecipeTagEditor(tags: $tags, suggestions: RecipeTagPolicy.catalog(from: store.recipes))
             HStack(spacing: 12) { Stepper("Prep \(prepMinutes) min", value: $prepMinutes, in: 0...480); Stepper("Cook \(cookMinutes) min", value: $cookMinutes, in: 0...480) }.font(.footnote)
             SurfaceCard {
                 VStack(alignment: .leading, spacing: 9) {
@@ -1578,7 +1585,7 @@ struct RecipeEditor: View {
     }
 
     private func saveRecipe() {
-        let updatedRecipe = Recipe(id: recipe?.id ?? UUID(), title: title.trimmingCharacters(in: .whitespacesAndNewlines), summary: summary, author: resolvedAuthor, servings: servings, tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }, ingredients: ingredients.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, steps: steps.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, nutrition: nutrition.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, imageData: imageData, notes: recipe?.notes ?? "", createdAt: recipe?.createdAt ?? Date(), prepTimeMinutes: prepMinutes == 0 ? nil : prepMinutes, cookTimeMinutes: cookMinutes == 0 ? nil : cookMinutes)
+        let updatedRecipe = Recipe(id: recipe?.id ?? UUID(), title: title.trimmingCharacters(in: .whitespacesAndNewlines), summary: summary, author: resolvedAuthor, servings: servings, tags: RecipeTagPolicy.normalized(tags), ingredients: ingredients.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, steps: steps.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, nutrition: nutrition.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }, imageData: imageData, notes: recipe?.notes ?? "", createdAt: recipe?.createdAt ?? Date(), prepTimeMinutes: prepMinutes == 0 ? nil : prepMinutes, cookTimeMinutes: cookMinutes == 0 ? nil : cookMinutes)
         guard !updatedRecipe.title.isEmpty else { validationMessage = "Add a recipe title before saving."; return }
         guard !updatedRecipe.ingredients.isEmpty else { validationMessage = "Add at least one ingredient before saving."; return }
         guard !updatedRecipe.steps.isEmpty else { validationMessage = "Add at least one instruction before saving."; return }
@@ -1597,7 +1604,7 @@ struct RecipeEditor: View {
         return UserProfile(id: UUID(), displayName: resolvedAuthor, username: resolvedAuthor)
     }
     private func retainFocus(_ field: RecipeEditorField) { DispatchQueue.main.async { focusedField = field } }
-    private enum RecipeEditorField { case title, summary, tags }
+    private enum RecipeEditorField { case title, summary }
 }
 
 struct IngredientInputRow: View {
@@ -1690,14 +1697,14 @@ struct NutritionInputRow: View {
 struct MealPlanListView: View {
     @EnvironmentObject private var store: MealStore
     @State private var showCreate = false; @State private var query = ""; @State private var selectedTags: Set<String> = []
-    private var tags: [String] { Array(Set(store.plans.flatMap(\.tags))).sorted() }
-    private var filteredPlans: [MealPlan] { store.plans.filter { plan in (query.isEmpty || plan.name.localizedCaseInsensitiveContains(query) || plan.tags.contains { $0.localizedCaseInsensitiveContains(query) }) && (selectedTags.isEmpty || !selectedTags.isDisjoint(with: Set(plan.tags))) } }
+    private var tags: [String] { RecipeTagPolicy.mealPlanCatalog(from: store.plans) }
+    private var filteredPlans: [MealPlan] { store.plans.filter { plan in (query.isEmpty || plan.name.localizedCaseInsensitiveContains(query) || plan.tags.contains { $0.localizedCaseInsensitiveContains(query) }) && RecipeTagPolicy.matchesAll(plan.tags, selectedTags: selectedTags) } }
     var body: some View {
         NavigationStack {
             ZStack {
                 AppTheme.background.ignoresSafeArea()
                 VStack(spacing: 0) {
-                    MultiSelectFilterMenu(title: "Label", selections: $selectedTags, options: tags)
+                    RecipeTagFilter(selections: $selectedTags, options: tags)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, AppTheme.Spacing.md)
                         .padding(.vertical, AppTheme.Spacing.xxs)
@@ -1759,10 +1766,10 @@ struct PlanRecipeSlot: Identifiable {
 struct MealPlanEditor: View {
     @EnvironmentObject private var store: MealStore; @EnvironmentObject private var householdStore: HouseholdStore; @Environment(\.dismiss) private var dismiss
     let existing: MealPlan?
-    @State private var name = ""; @State private var tagText = ""; @State private var weekCount = 1; @State private var meals: [PlanMeal] = []; @State private var expandedWeek = 1
+    @State private var name = ""; @State private var tags: [String] = []; @State private var weekCount = 1; @State private var meals: [PlanMeal] = []; @State private var expandedWeek = 1
     @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?; @State private var recipeSlot: PlanRecipeSlot?; @State private var confirmHouseholdShare = false; @State private var shareMessage: String?
     @FocusState private var focusedField: MealPlanEditorField?
-    init(plan: MealPlan?) { existing = plan; _name = State(initialValue: plan?.name ?? ""); _tagText = State(initialValue: plan?.tags.joined(separator: ", ") ?? ""); _weekCount = State(initialValue: plan?.weekCount ?? 1); _meals = State(initialValue: plan?.meals ?? []); _imageData = State(initialValue: plan?.imageData) }
+    init(plan: MealPlan?) { existing = plan; _name = State(initialValue: plan?.name ?? ""); _tags = State(initialValue: RecipeTagPolicy.normalized(plan?.tags ?? [])); _weekCount = State(initialValue: plan?.weekCount ?? 1); _meals = State(initialValue: plan?.meals ?? []); _imageData = State(initialValue: plan?.imageData) }
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
@@ -1842,8 +1849,13 @@ struct MealPlanEditor: View {
                 Text("Plan details").font(.custom("Plus Jakarta Sans", size: 19).weight(.bold)).foregroundStyle(AppTheme.text)
                 fieldLabel("Plan name")
                 TextField("e.g. Weekday Favorites", text: $name).figmaInput().focused($focusedField, equals: .name).onChange(of: name) { retainFocus(.name) }
-                fieldLabel("Labels")
-                TextField("e.g. Easy, Family", text: $tagText).figmaInput().focused($focusedField, equals: .labels).onChange(of: tagText) { retainFocus(.labels) }
+                RecipeTagEditor(
+                    tags: $tags,
+                    suggestions: RecipeTagPolicy.mealPlanCatalog(from: store.plans),
+                    helperText: "Add tags to organize and find this meal plan later.",
+                    titleFont: .custom("Plus Jakarta Sans", size: 19).weight(.bold),
+                    usesSurfaceCard: false
+                )
                 Text("Add weeks below to build the plan duration.").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label)
             }
         }
@@ -1884,9 +1896,9 @@ struct MealPlanEditor: View {
 
     private func fieldLabel(_ title: String) -> some View { Text(title).font(.custom("Inter", size: 12).weight(.semibold)).foregroundStyle(AppTheme.label) }
     private func retainFocus(_ field: MealPlanEditorField) { DispatchQueue.main.async { focusedField = field } }
-    private enum MealPlanEditorField { case name, labels }
+    private enum MealPlanEditorField { case name }
     private func setRecipe(_ recipeID: UUID, for slot: PlanRecipeSlot) { meals.removeAll { $0.week == slot.week && $0.weekday == slot.weekday && $0.mealType == slot.mealType }; meals.append(PlanMeal(week: slot.week, weekday: slot.weekday, mealType: slot.mealType, recipeID: recipeID)) }
-    private func savePlan() { guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; store.save(plan: MealPlan(id: existing?.id ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), tags: tagText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }, weekCount: weekCount, meals: meals.filter { $0.week <= weekCount }, imageData: imageData)); dismiss() }
+    private func savePlan() { guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; store.save(plan: MealPlan(id: existing?.id ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), tags: RecipeTagPolicy.normalized(tags), weekCount: weekCount, meals: meals.filter { $0.week <= weekCount }, imageData: imageData)); dismiss() }
     private func sharePlan() { guard let existing else { return }; Task { do { try await householdStore.share(plan: existing); shareMessage = "Meal plan shared with \(householdStore.household?.name ?? "your household")." } catch { shareMessage = error.localizedDescription } } }
 }
 
@@ -1896,7 +1908,9 @@ private struct PlanRecipePickerSheet: View {
     let slot: PlanRecipeSlot
     let select: (UUID) -> Void
     @State private var query = ""
-    private var recipes: [Recipe] { store.recipes.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.tags.contains { $0.localizedCaseInsensitiveContains(query) } } }
+    @State private var selectedTags: Set<String> = []
+    private var tags: [String] { RecipeTagPolicy.catalog(from: store.recipes) }
+    private var recipes: [Recipe] { store.recipes.filter { RecipeTagPolicy.matches($0, query: query, selectedTags: selectedTags) } }
 
     var body: some View {
         NavigationStack {
@@ -1906,6 +1920,7 @@ private struct PlanRecipePickerSheet: View {
                     HStack { Spacer().frame(width: 30); Spacer(); Text("Choose Recipe").font(.custom("Plus Jakarta Sans", size: 26).weight(.bold)).foregroundStyle(AppTheme.text); Spacer(); Button { dismiss() } label: { Image(systemName: "xmark").font(.headline).foregroundStyle(AppTheme.text).frame(width: 30, height: 30) } }
                     Text("\(weekdayName(slot.weekday)) · \(slot.mealType.displayName)").font(.custom("Inter", size: 13)).foregroundStyle(AppTheme.label).frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 8) { Image(systemName: "magnifyingglass").foregroundStyle(AppTheme.label); TextField("Search recipes", text: $query).foregroundStyle(AppTheme.text) }.padding(.horizontal, 12).frame(height: 36).background(AppTheme.input).clipShape(Capsule())
+                    RecipeTagFilter(selections: $selectedTags, options: tags).frame(maxWidth: .infinity, alignment: .leading)
                     ScrollView { LazyVStack(spacing: 9) { ForEach(recipes) { recipe in Button { select(recipe.id); dismiss() } label: { RecipeSelectionCard(recipe: recipe) }.buttonStyle(.plain) } }.padding(.bottom, 12) }.scrollIndicators(.hidden)
                 }.padding(.horizontal, 16).padding(.top, 8)
             }
@@ -2312,16 +2327,15 @@ struct ScheduleMealSheet: View {
     let date: Date
     @State private var type: MealType?
     @State private var query = ""
-    @State private var selectedTag: String?
+    @State private var selectedTags: Set<String> = []
     @State private var pendingRecipe: Recipe?
 
     init(date: Date, initialType: MealType? = nil) { self.date = date; _type = State(initialValue: initialType) }
 
-    private var tags: [String] { Array(Set(store.recipes.flatMap(\.tags))).sorted() }
+    private var tags: [String] { RecipeTagPolicy.catalog(from: store.recipes) }
     private var filteredRecipes: [Recipe] {
         store.recipes.filter { recipe in
-            (query.isEmpty || recipe.title.localizedCaseInsensitiveContains(query) || recipe.author.localizedCaseInsensitiveContains(query) || recipe.tags.contains { $0.localizedCaseInsensitiveContains(query) }) &&
-            (selectedTag == nil || recipe.tags.contains(selectedTag!))
+            RecipeTagPolicy.matches(recipe, query: query, selectedTags: selectedTags)
         }
     }
 
@@ -2344,17 +2358,9 @@ struct ScheduleMealSheet: View {
                             .font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label).frame(maxWidth: .infinity, alignment: .leading)
                         Text(date.formatted(date: .abbreviated, time: .omitted))
                             .font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label).frame(maxWidth: .infinity, alignment: .leading)
-                        HStack(spacing: 10) {
-                            HStack(spacing: 8) { Image(systemName: "magnifyingglass").foregroundStyle(AppTheme.label); TextField("Search", text: $query).foregroundStyle(AppTheme.text) }
-                                .padding(.horizontal, 12).frame(height: 34).background(AppTheme.input).clipShape(Capsule())
-                            Menu {
-                                Button("All Labels") { selectedTag = nil }
-                                ForEach(tags, id: \.self) { tag in Button(tag) { selectedTag = tag } }
-                            } label: {
-                                HStack(spacing: 4) { Text(selectedTag ?? "Label"); Image(systemName: "chevron.down").font(.caption2) }
-                                    .font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.label).padding(.horizontal, 12).frame(height: 34).background(AppTheme.input).clipShape(Capsule())
-                            }
-                        }
+                        HStack(spacing: 8) { Image(systemName: "magnifyingglass").foregroundStyle(AppTheme.label); TextField("Search", text: $query).foregroundStyle(AppTheme.text) }
+                            .padding(.horizontal, 12).frame(height: 34).background(AppTheme.input).clipShape(Capsule())
+                        RecipeTagFilter(selections: $selectedTags, options: tags).frame(maxWidth: .infinity, alignment: .leading)
                         ScrollView {
                             LazyVStack(spacing: 9) {
                                 if filteredRecipes.isEmpty {
@@ -2415,13 +2421,13 @@ struct ApplyPlanSheet: View {
     @State private var replace = false
     @State private var step = 1
     @State private var query = ""
-    @State private var selectedTag: String?
+    @State private var selectedTags: Set<String> = []
     @State private var showStartCalendar = false
     @State private var showEndCalendar = false
 
     init(startDate: Date) { self.startDate = startDate; _start = State(initialValue: startDate); _end = State(initialValue: Calendar.current.date(byAdding: .day, value: 6, to: startDate) ?? startDate) }
-    private var tags: [String] { Array(Set(store.plans.flatMap(\.tags))).sorted() }
-    private var filteredPlans: [MealPlan] { store.plans.filter { (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.tags.contains { $0.localizedCaseInsensitiveContains(query) }) && (selectedTag == nil || $0.tags.contains(selectedTag!)) } }
+    private var tags: [String] { RecipeTagPolicy.mealPlanCatalog(from: store.plans) }
+    private var filteredPlans: [MealPlan] { store.plans.filter { (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.tags.contains { $0.localizedCaseInsensitiveContains(query) }) && RecipeTagPolicy.matchesAll($0.tags, selectedTags: selectedTags) } }
     private var selectedPlan: MealPlan? { store.plans.first { $0.id == planID } }
 
     var body: some View {
@@ -2448,10 +2454,8 @@ struct ApplyPlanSheet: View {
 
     private var planPicker: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                HStack(spacing: 8) { Image(systemName: "magnifyingglass").foregroundStyle(AppTheme.label); TextField("Search", text: $query).foregroundStyle(AppTheme.text) }.padding(.horizontal, 12).frame(height: 34).background(AppTheme.input).clipShape(Capsule())
-                Menu { Button("All Labels") { selectedTag = nil }; ForEach(tags, id: \.self) { tag in Button(tag) { selectedTag = tag } } } label: { HStack(spacing: 4) { Text(selectedTag ?? "Label"); Image(systemName: "chevron.down").font(.caption2) }.font(.custom("Inter", size: 14)).foregroundStyle(AppTheme.label).padding(.horizontal, 12).frame(height: 34).background(AppTheme.input).clipShape(Capsule()) }
-            }
+            HStack(spacing: 8) { Image(systemName: "magnifyingglass").foregroundStyle(AppTheme.label); TextField("Search", text: $query).foregroundStyle(AppTheme.text) }.padding(.horizontal, 12).frame(height: 34).background(AppTheme.input).clipShape(Capsule())
+            RecipeTagFilter(selections: $selectedTags, options: tags).frame(maxWidth: .infinity, alignment: .leading)
             ScrollView { LazyVStack(spacing: 9) { ForEach(filteredPlans) { plan in planRow(plan) } }.padding(.bottom, 12) }.scrollIndicators(.hidden)
         }
     }

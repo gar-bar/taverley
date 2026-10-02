@@ -237,11 +237,34 @@ struct HouseholdHomeView: View {
 struct HouseholdRecipesView: View {
     @EnvironmentObject private var householdStore: HouseholdStore
     @State private var query = ""
+    @State private var selectedTags: Set<String> = []
     @State private var showCreate = false
+    private var tags: [String] { RecipeTagPolicy.catalog(from: householdStore.householdRecipes) }
+    private var recipes: [HouseholdRecipe] {
+        householdStore.recipes.filter { RecipeTagPolicy.matches($0.recipe, query: query, selectedTags: selectedTags) }
+    }
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             AppTheme.background.ignoresSafeArea()
-            ScrollView { VStack(spacing: 12) { HStack { Image(systemName: "magnifyingglass"); TextField("Search shared recipes", text: $query) }.figmaInput(); LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) { ForEach(householdStore.recipes.filter { query.isEmpty || $0.recipe.title.localizedCaseInsensitiveContains(query) }) { item in NavigationLink { HouseholdRecipeDetailView(item: item) } label: { RecipeCard(recipe: item.recipe) } } } }.padding(16).padding(.bottom, 110) }
+            ScrollView {
+                VStack(spacing: 12) {
+                    HStack { Image(systemName: "magnifyingglass"); TextField("Search shared recipes", text: $query) }.figmaInput()
+                    RecipeTagFilter(selections: $selectedTags, options: tags).frame(maxWidth: .infinity, alignment: .leading)
+                    if recipes.isEmpty {
+                        ContentUnavailableView(
+                            query.isEmpty && selectedTags.isEmpty ? "No shared recipes yet" : "No matching recipes",
+                            systemImage: "book.closed",
+                            description: Text(query.isEmpty && selectedTags.isEmpty ? "Create or share a recipe with your household." : "Try a different search or filter.")
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 300)
+                    } else {
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                            ForEach(recipes) { item in NavigationLink { HouseholdRecipeDetailView(item: item) } label: { RecipeCard(recipe: item.recipe) } }
+                        }
+                    }
+                }
+                .padding(16).padding(.bottom, 110)
+            }
             Button { showCreate = true } label: { Label("New Recipe", systemImage: "plus").font(.subheadline.bold()).padding(.horizontal, 18).padding(.vertical, 13).background(AppTheme.primary).foregroundStyle(.black).clipShape(Capsule()) }
                 .padding(.trailing, 20)
                 .padding(.bottom, 90)
@@ -275,7 +298,7 @@ struct HouseholdRecipeEditor: View {
     @State private var summary: String
     @State private var author: String
     @State private var servings: Int
-    @State private var tags: String
+    @State private var tags: [String]
     @State private var ingredients: [Ingredient]
     @State private var steps: [RecipeStep]
     @State private var nutrition: [NutritionFact]
@@ -291,7 +314,7 @@ struct HouseholdRecipeEditor: View {
         _summary = State(initialValue: recipe?.summary ?? "")
         _author = State(initialValue: recipe?.author ?? "Me")
         _servings = State(initialValue: recipe?.servings ?? 4)
-        _tags = State(initialValue: recipe?.tags.joined(separator: ", ") ?? "")
+        _tags = State(initialValue: RecipeTagPolicy.normalized(recipe?.tags ?? []))
         _ingredients = State(initialValue: recipe?.ingredients ?? [Ingredient(name: "", quantity: 1, unit: "cups")])
         _steps = State(initialValue: recipe?.steps ?? [RecipeStep(text: "")])
         _nutrition = State(initialValue: recipe?.nutrition ?? [])
@@ -363,9 +386,9 @@ struct HouseholdRecipeEditor: View {
             HStack {
                 Text("Serves \(servings)").foregroundStyle(AppTheme.label)
                 Stepper("", value: $servings, in: 1...30).labelsHidden()
-                TextField("Tags", text: $tags).figmaInput()
             }
             .padding(.bottom, 8)
+            RecipeTagEditor(tags: $tags, suggestions: RecipeTagPolicy.catalog(from: householdStore.householdRecipes))
             SurfaceCard {
                 VStack(alignment: .leading, spacing: 9) {
                     Text("Ingredients").font(.custom("Plus Jakarta Sans", size: 22).weight(.semibold))
@@ -407,7 +430,7 @@ struct HouseholdRecipeEditor: View {
             summary: summary,
             author: resolvedAuthor,
             servings: servings,
-            tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+            tags: RecipeTagPolicy.normalized(tags),
             ingredients: ingredients.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             steps: steps.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
             nutrition: nutrition.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
@@ -637,11 +660,13 @@ private struct HouseholdPlanRecipePickerSheet: View {
     let slot: PlanRecipeSlot
     let select: (UUID) -> Void
     @State private var query = ""
+    @State private var selectedTags: Set<String> = []
+
+    private var tags: [String] { RecipeTagPolicy.catalog(from: householdStore.householdRecipes) }
 
     private var recipes: [HouseholdRecipe] {
         householdStore.recipes.filter {
-            query.isEmpty || $0.recipe.title.localizedCaseInsensitiveContains(query)
-                || $0.recipe.tags.contains { $0.localizedCaseInsensitiveContains(query) }
+            RecipeTagPolicy.matches($0.recipe, query: query, selectedTags: selectedTags)
         }
     }
 
@@ -663,6 +688,7 @@ private struct HouseholdPlanRecipePickerSheet: View {
                         TextField("Search recipes", text: $query).foregroundStyle(AppTheme.text)
                     }
                     .padding(.horizontal, 12).frame(height: 36).background(AppTheme.input).clipShape(Capsule())
+                    RecipeTagFilter(selections: $selectedTags, options: tags).frame(maxWidth: .infinity, alignment: .leading)
                     ScrollView {
                         LazyVStack(spacing: 9) {
                             ForEach(recipes) { item in
@@ -676,7 +702,7 @@ private struct HouseholdPlanRecipePickerSheet: View {
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(item.recipe.title).font(.custom("Plus Jakarta Sans", size: 17).weight(.semibold)).foregroundStyle(AppTheme.text)
                                             Text(item.recipe.author).font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label)
-                                            HStack(spacing: 6) { ForEach(item.recipe.tags.prefix(2), id: \.self) { Tag(title: $0) } }
+                                            if !item.recipe.tags.isEmpty { TagPreview(tags: item.recipe.tags) }
                                         }
                                         Spacer()
                                     }
@@ -705,12 +731,14 @@ struct HouseholdCalendarView: View {
 
 struct HouseholdScheduleMealSheet: View {
     @EnvironmentObject private var householdStore: HouseholdStore; @Environment(\.dismiss) private var dismiss
-    let date: Date; @State private var selectedType: MealType; @State private var query = ""
+    let date: Date; @State private var selectedType: MealType; @State private var query = ""; @State private var selectedTags: Set<String> = []
     init(date: Date, initialType: MealType? = nil) {
         self.date = date
         _selectedType = State(initialValue: initialType ?? .dinner)
     }
-    var body: some View { NavigationStack { ZStack { AppTheme.background.ignoresSafeArea(); VStack(spacing: 12) { Picker("Meal", selection: $selectedType) { ForEach(MealType.allCases) { Text($0.displayName).tag($0) } }.pickerStyle(.segmented); HStack { Image(systemName: "magnifyingglass"); TextField("Search household recipes", text: $query) }.figmaInput(); ScrollView { LazyVStack(spacing: 9) { ForEach(householdStore.recipes.filter { query.isEmpty || $0.recipe.title.localizedCaseInsensitiveContains(query) }) { item in Button { Task { try? await householdStore.schedule(recipeID: item.id, on: date, type: selectedType); dismiss() } } label: { RecipeSelectionCard(recipe: item.recipe) }.buttonStyle(.plain) } } } }.padding(16) }.navigationTitle("Add Household Meal").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } } } }
+    private var tags: [String] { RecipeTagPolicy.catalog(from: householdStore.householdRecipes) }
+    private var recipes: [HouseholdRecipe] { householdStore.recipes.filter { RecipeTagPolicy.matches($0.recipe, query: query, selectedTags: selectedTags) } }
+    var body: some View { NavigationStack { ZStack { AppTheme.background.ignoresSafeArea(); VStack(spacing: 12) { Picker("Meal", selection: $selectedType) { ForEach(MealType.allCases) { Text($0.displayName).tag($0) } }.pickerStyle(.segmented); HStack { Image(systemName: "magnifyingglass"); TextField("Search household recipes", text: $query) }.figmaInput(); RecipeTagFilter(selections: $selectedTags, options: tags).frame(maxWidth: .infinity, alignment: .leading); ScrollView { LazyVStack(spacing: 9) { ForEach(recipes) { item in Button { Task { try? await householdStore.schedule(recipeID: item.id, on: date, type: selectedType); dismiss() } } label: { RecipeSelectionCard(recipe: item.recipe) }.buttonStyle(.plain) } } } }.padding(16) }.navigationTitle("Add Household Meal").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } } } }
 }
 
 struct HouseholdApplyPlanSheet: View {

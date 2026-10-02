@@ -183,6 +183,24 @@ struct FeedFeatureTests {
         #expect(recipe.totalTimeMinutes == 35)
     }
 
+    @Test func recipeTagsNormalizeAndPreserveCustomSpelling() {
+        #expect(RecipeTagPolicy.normalized([" quick ", "Quick", "DAIRY free", "dairy   free", ""]) == ["quick", "Dairy Free"])
+        #expect(RecipeTagPolicy.catalog(from: []).starts(with: RecipeTagPolicy.starterTags))
+    }
+
+    @Test func recipeTagFilteringMatchesEverySelectedTagAndSearchesTags() {
+        let recipe = Recipe(title: "Pasta", summary: "", author: "Cook", servings: 2, tags: ["Quick", "Vegetarian"], ingredients: [], steps: [], nutrition: [])
+        #expect(RecipeTagPolicy.matches(recipe, query: "quick", selectedTags: ["Vegetarian", "quick"]))
+        #expect(!RecipeTagPolicy.matches(recipe, query: "", selectedTags: ["Vegan", "Quick"]))
+    }
+
+    @Test func normalizedTagsRemainCodableInExistingRecipePayloads() throws {
+        let tags = RecipeTagPolicy.normalized([" quick ", "QUICK", "Dairy Free"])
+        let recipe = Recipe(title: "Soup", summary: "", author: "Cook", servings: 2, tags: tags, ingredients: [], steps: [], nutrition: [])
+        let decoded = try JSONDecoder().decode(Recipe.self, from: JSONEncoder().encode(recipe))
+        #expect(decoded.tags == ["quick", "Dairy Free"])
+    }
+
     @Test func favouriteFiltersAreExclusiveAndStartWithRecipes() {
         let selected = FavouriteKind.recipes
 

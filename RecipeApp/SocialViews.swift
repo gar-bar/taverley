@@ -393,6 +393,102 @@ struct FollowRequestNotificationButton: View {
     }
 }
 
+/// The Feed has one notification destination for every pending social and
+/// household action, rather than competing toolbar badges.
+struct NotificationsButton: View {
+    @EnvironmentObject private var socialStore: SocialStore
+    @EnvironmentObject private var householdStore: HouseholdStore
+
+    private var pendingCount: Int {
+        socialStore.followRequests.count + householdStore.pendingInvitationCount
+    }
+
+    var body: some View {
+        NavigationLink { NotificationsInboxView() } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: pendingCount > 0 ? "bell.fill" : "bell")
+                    .frame(width: 44, height: 44)
+                if pendingCount > 0 {
+                    Text("\(min(pendingCount, 9))")
+                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.black)
+                        .frame(width: 16, height: 16).background(AppTheme.primary).clipShape(Circle())
+                        .offset(x: -2, y: 2)
+                }
+            }
+        }
+        .accessibilityLabel("Notifications, \(pendingCount) pending")
+    }
+}
+
+struct NotificationsInboxView: View {
+    @EnvironmentObject private var socialStore: SocialStore
+    @EnvironmentObject private var householdStore: HouseholdStore
+
+    private var hasNotifications: Bool {
+        !socialStore.followRequests.isEmpty || householdStore.pendingInvitationCount > 0
+    }
+
+    var body: some View {
+        ZStack {
+            AppTheme.background.ignoresSafeArea()
+            if hasNotifications {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if !socialStore.followRequests.isEmpty {
+                            notificationLink(
+                                title: "Follow requests",
+                                detail: "\(socialStore.followRequests.count) pending",
+                                image: "person.badge.clock",
+                                destination: { FollowRequestInboxView() }
+                            )
+                        }
+                        if householdStore.pendingInvitationCount > 0 {
+                            notificationLink(
+                                title: "Household invitations",
+                                detail: "\(householdStore.pendingInvitationCount) pending",
+                                image: "house.fill",
+                                destination: { HouseholdInvitationInboxView() }
+                            )
+                        }
+                    }
+                    .padding(16)
+                }
+                .refreshable {
+                    await socialStore.refreshFollowRequests()
+                    await householdStore.refreshInvitations()
+                }
+            } else {
+                ContentUnavailableView("No notifications", systemImage: "bell", description: Text("Follow requests and household invitations will appear here."))
+            }
+        }
+        .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await socialStore.refreshFollowRequests()
+            await householdStore.refreshInvitations()
+        }
+    }
+
+    private func notificationLink<Destination: View>(title: String, detail: String, image: String, @ViewBuilder destination: () -> Destination) -> some View {
+        NavigationLink(destination: destination) {
+            SurfaceCard {
+                HStack(spacing: 12) {
+                    Image(systemName: image)
+                        .font(.title3).foregroundStyle(AppTheme.primary)
+                        .frame(width: 42, height: 42).background(AppTheme.input).clipShape(Circle())
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.headline).foregroundStyle(AppTheme.text)
+                        Text(detail).font(.caption).foregroundStyle(AppTheme.label)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(AppTheme.label)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct FollowRequestInboxView: View {
     @EnvironmentObject private var socialStore: SocialStore
     @EnvironmentObject private var feedStore: FeedStore

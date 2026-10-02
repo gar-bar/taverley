@@ -30,6 +30,66 @@ struct Recipe: Identifiable, Codable, Hashable {
     }
 }
 
+/// Keeps the persisted recipe representation simple while making tag identity
+/// consistent everywhere it is displayed, edited, and filtered.
+enum RecipeTagPolicy {
+    static let starterTags = [
+        "Breakfast", "Brunch", "Lunch", "Dinner", "Dessert", "Vegetarian",
+        "Vegan", "Dairy Free", "Gluten Free", "Healthy"
+    ]
+    static let mealPlanStarterTags = ["Easy", "Family", "Weeknight", "Weekend", "Meal Prep", "Favourites"]
+
+    static func key(for tag: String) -> String {
+        clean(tag).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).lowercased()
+    }
+
+    static func clean(_ tag: String) -> String {
+        tag.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    static func normalized(_ tags: [String]) -> [String] {
+        var seen = Set<String>()
+        let starterByKey = Dictionary(uniqueKeysWithValues: starterTags.map { (key(for: $0), $0) })
+        return tags.compactMap { rawTag in
+            let cleaned = clean(rawTag)
+            let tagKey = key(for: cleaned)
+            guard !tagKey.isEmpty, seen.insert(tagKey).inserted else { return nil }
+            return starterByKey[tagKey] ?? cleaned
+        }
+    }
+
+    static func catalog(from recipes: [Recipe]) -> [String] {
+        normalized(starterTags + recipes.flatMap(\.tags))
+    }
+
+    static func mealPlanCatalog(from plans: [MealPlan]) -> [String] {
+        normalized(mealPlanStarterTags + plans.flatMap(\.tags))
+    }
+
+    static func matchesAll(_ recipe: Recipe, selectedTags: Set<String>) -> Bool {
+        matchesAll(recipe.tags, selectedTags: selectedTags)
+    }
+
+    static func matchesAll(_ tags: [String], selectedTags: Set<String>) -> Bool {
+        guard !selectedTags.isEmpty else { return true }
+        let tagKeys = Set(tags.map(key(for:)))
+        return selectedTags.allSatisfy { tagKeys.contains(key(for: $0)) }
+    }
+
+    static func matchesSearch(_ recipe: Recipe, query: String) -> Bool {
+        let query = clean(query)
+        guard !query.isEmpty else { return true }
+        let searchable = [recipe.title, recipe.author] + recipe.tags + recipe.ingredients.map { $0.name }
+        return searchable.contains { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    static func matches(_ recipe: Recipe, query: String, selectedTags: Set<String>) -> Bool {
+        matchesSearch(recipe, query: query) && matchesAll(recipe, selectedTags: selectedTags)
+    }
+}
+
 struct PlanMeal: Identifiable, Codable, Hashable {
     var id = UUID(); var week: Int; var weekday: Int; var mealType: MealType; var recipeID: UUID; var order: Int = 0
 }
