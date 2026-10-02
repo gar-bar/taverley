@@ -100,88 +100,106 @@ struct EmailCodeSignInView: View {
                 }
             } else {
                 ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    Spacer(minLength: 64)
+                    VStack(alignment: .leading, spacing: 0) {
+                        TaverleyBrandLockup()
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, mode == .signIn ? 24 : 16)
 
-                    Image(systemName: "fork.knife.circle.fill")
-                        .font(.system(size: 52))
-                        .foregroundStyle(AppTheme.primary)
+                        Text(mode.title)
+                            .font(.custom("Plus Jakarta Sans", size: 29).weight(.bold))
+                            .tracking(-0.8)
+                            .foregroundStyle(AppTheme.text)
+                            .padding(.top, mode == .signIn ? 40 : 30)
 
-                    Text(mode.title)
-                        .font(.custom("Plus Jakarta Sans", size: 31).weight(.bold))
-                        .foregroundStyle(AppTheme.text)
-                        .padding(.top, 24)
+                        Text(mode.detail)
+                            .font(.custom("Inter", size: 15))
+                            .foregroundStyle(AppTheme.label)
+                            .lineSpacing(5)
+                            .padding(.top, 10)
 
-                    Text(mode.detail)
-                        .font(.custom("Inter", size: 16))
-                        .foregroundStyle(AppTheme.label)
-                        .lineSpacing(3)
-                        .padding(.top, 10)
+                        if mode == .createAccount {
+                            fieldLabel("Username", top: 28)
+                            TextField("", text: $username, prompt: fieldPrompt("your_username"))
+                                .authInputStyle()
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .textContentType(.username)
+                                .focused($focusedField, equals: .username)
+                                .submitLabel(.next)
+                                .onSubmit { focusedField = .email }
+                                .onChange(of: username) { username = UsernamePolicy.normalize(username) }
+                                .task(id: username) { await checkUsername() }
+                                .padding(.top, 8)
+                            usernameAvailabilityLabel
+                                .font(.custom("Inter", size: 13))
+                                .padding(.top, 8)
+                        }
 
-                    if mode == .createAccount {
-                        fieldLabel("Username", top: 28)
-                        TextField("your_username", text: $username)
-                            .figmaInput().textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .textContentType(.username).focused($focusedField, equals: .username).submitLabel(.next)
-                            .onSubmit { focusedField = .email }
-                            .onChange(of: username) { username = UsernamePolicy.normalize(username) }
-                            .task(id: username) { await checkUsername() }
-                        usernameAvailabilityLabel
-                    }
+                        fieldLabel("Email address", top: mode == .createAccount ? 18 : 30)
 
-                    fieldLabel("Email address", top: mode == .createAccount ? 16 : 30)
+                        TextField("", text: $email, prompt: fieldPrompt("you@example.com"))
+                            .authInputStyle()
+                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .textContentType(.emailAddress)
+                            .focused($focusedField, equals: .email)
+                            .submitLabel(mode == .recovery ? .go : .next)
+                            .onSubmit {
+                                if mode == .recovery { submit() }
+                                else { focusedField = .password }
+                            }
+                            .padding(.top, 8)
 
-                    TextField("you@example.com", text: $email)
-                        .figmaInput()
-                        .keyboardType(.emailAddress)
-                        .textInputAutocapitalization(.never)
-                        .textContentType(.emailAddress)
-                        .focused($focusedField, equals: .email)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .password }
-                        .padding(.top, 8)
+                        if mode != .recovery {
+                            HStack(alignment: .firstTextBaseline) {
+                                fieldLabel("Password", top: 18)
+                                Spacer()
+                                if mode == .signIn {
+                                    Button("Forgot password?") {
+                                        mode = .recovery
+                                        focusedField = nil
+                                        resetMessages()
+                                    }
+                                    .font(.custom("Inter", size: 14).weight(.semibold))
+                                    .foregroundStyle(AppTheme.accent)
+                                    .padding(.top, 18)
+                                }
+                            }
 
-                    fieldLabel("Password", top: 18)
-                    passwordField("Password", text: $password, contentType: mode == .createAccount ? .newPassword : .password, revealsText: $showsPassword)
-                        .padding(.top, 8)
-                        .focused($focusedField, equals: .password)
+                            passwordField("Enter your password", text: $password, contentType: mode == .createAccount ? .newPassword : .password, revealsText: $showsPassword)
+                                .padding(.top, 8)
+                                .focused($focusedField, equals: .password)
+                        }
 
-                    if mode == .createAccount {
-                        fieldLabel("Confirm password", top: 18)
-                        passwordField("Confirm password", text: $passwordConfirmation, contentType: .newPassword, revealsText: $showsConfirmation)
+                        if mode == .createAccount {
+                            fieldLabel("Confirm password", top: 18)
+                            passwordField("Confirm your password", text: $passwordConfirmation, contentType: .newPassword, revealsText: $showsConfirmation)
                             .padding(.top, 8)
                             .focused($focusedField, equals: .confirmation)
-                        PasswordRequirementsView(password: password, confirmation: passwordConfirmation)
-                            .padding(.top, 12)
-                    }
+                            PasswordRequirementsView(password: password, confirmation: passwordConfirmation)
+                                .padding(.top, 12)
+                        }
 
-                    Button(action: submit) { buttonLabel(mode.buttonTitle) }
-                    .disabled(!canSubmit || isSubmitting)
-                    .padding(.top, 14)
+                        Button(action: submit) { buttonLabel(mode.buttonTitle) }
+                            .disabled(!canSubmit || isSubmitting)
+                            .opacity(canSubmit && !isSubmitting ? 1 : 0.55)
+                            .padding(.top, mode == .signIn ? 32 : 20)
 
-                    if let errorMessage {
-                        InlineErrorBanner(message: errorMessage, retry: nil).padding(.top, 16)
-                    }
+                        if let errorMessage {
+                            InlineErrorBanner(message: errorMessage, retry: nil).padding(.top, 16)
+                        }
 
-                    if mode == .signIn {
-                        Button("Forgot password?") { mode = .recovery; resetMessages() }
+                        authModeSwitcher
+
+                        #if DEBUG
+                        Button("Skip for now") { authentication.isSkippingForNow = true }
                             .authSecondaryButton()
+                        #endif
                     }
-
-                    Button(mode.switchTitle) {
-                        mode = mode.switchMode
-                        password = ""; passwordConfirmation = ""; resetMessages()
-                    }
-                    .authSecondaryButton()
-
-                    #if DEBUG
-                    Button("Skip for now") { authentication.isSkippingForNow = true }
-                        .authSecondaryButton()
-                    #endif
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 30)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 30)
-                }
+                .scrollDismissesKeyboard(.interactively)
             }
         }
     }
@@ -199,18 +217,34 @@ struct EmailCodeSignInView: View {
     }
 
     private func fieldLabel(_ title: String, top: CGFloat) -> some View {
-        Text(title).font(.custom("Inter", size: 15).weight(.medium)).foregroundStyle(AppTheme.text).padding(.top, top)
+        Text(title)
+            .font(.custom("Inter", size: 14).weight(.semibold))
+            .foregroundStyle(AppTheme.text)
+            .padding(.top, top)
+    }
+
+    private func fieldPrompt(_ title: String) -> Text {
+        Text(title).foregroundStyle(AppTheme.textSecondary)
     }
 
     private func passwordField(_ title: String, text: Binding<String>, contentType: UITextContentType, revealsText: Binding<Bool>) -> some View {
-        HStack {
+        HStack(spacing: 12) {
             Group {
-                if revealsText.wrappedValue { TextField(title, text: text) } else { SecureField(title, text: text) }
+                if revealsText.wrappedValue {
+                    TextField("", text: text, prompt: fieldPrompt(title))
+                } else {
+                    SecureField("", text: text, prompt: fieldPrompt(title))
+                }
             }
             .textContentType(contentType)
-            Button { revealsText.wrappedValue.toggle() } label: { Image(systemName: revealsText.wrappedValue ? "eye.slash" : "eye") }
+            Button { revealsText.wrappedValue.toggle() } label: {
+                Image(systemName: revealsText.wrappedValue ? "eye.slash" : "eye")
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .frame(width: 28, height: 44)
+            }
                 .accessibilityLabel(revealsText.wrappedValue ? "Hide \(title)" : "Show \(title)")
-        }.figmaInput()
+        }
+        .authInputStyle()
     }
 
     @ViewBuilder private var usernameAvailabilityLabel: some View {
@@ -225,16 +259,42 @@ struct EmailCodeSignInView: View {
 
     private func buttonLabel(_ title: String) -> some View {
         HStack(spacing: 10) {
-            if isSubmitting { ProgressView().tint(.black) }
+            if isSubmitting { ProgressView().tint(Color(red: 22/255, green: 15/255, blue: 27/255)) }
             Text(title)
         }
         .font(.custom("Inter", size: 16).weight(.bold))
-        .foregroundStyle(.black)
+        .foregroundStyle(Color(red: 22/255, green: 15/255, blue: 27/255))
         .frame(maxWidth: .infinity)
-        .frame(height: 48)
-        .background(AppTheme.primary)
+        .frame(height: 52)
+        .background(AppTheme.accent)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .opacity(isSubmitting ? 0.72 : 1)
+    }
+
+    @ViewBuilder private var authModeSwitcher: some View {
+        if mode == .recovery {
+            Button("Back to sign in") { switchMode(to: .signIn) }
+                .authSecondaryButton()
+                .padding(.top, 8)
+        } else {
+            HStack(spacing: 5) {
+                Text(mode.switchPrompt)
+                    .foregroundStyle(AppTheme.textSecondary)
+                Button(mode.switchTitle) { switchMode(to: mode.switchMode) }
+                    .foregroundStyle(AppTheme.accent)
+                    .fontWeight(.semibold)
+            }
+            .font(.custom("Inter", size: 15))
+            .frame(maxWidth: .infinity)
+            .padding(.top, 24)
+        }
+    }
+
+    private func switchMode(to newMode: AuthEntryMode) {
+        mode = newMode
+        focusedField = nil
+        password = ""
+        passwordConfirmation = ""
+        resetMessages()
     }
 
     private func submit() {
@@ -271,11 +331,78 @@ struct EmailCodeSignInView: View {
 
 private enum AuthEntryMode {
     case signIn, createAccount, recovery
-    var title: String { switch self { case .signIn: "Welcome to Taverley"; case .createAccount: "Create your account"; case .recovery: "Reset your password" } }
+    var title: String { switch self { case .signIn: "Welcome back"; case .createAccount: "Create your account"; case .recovery: "Reset your password" } }
     var detail: String { switch self { case .signIn: "Sign in to keep your recipes available on every device."; case .createAccount: "Choose your unique identity and secure your recipes."; case .recovery: "We’ll email you a six-digit recovery code." } }
     var buttonTitle: String { switch self { case .signIn: "Sign in"; case .createAccount: "Create account"; case .recovery: "Send recovery code" } }
-    var switchTitle: String { switch self { case .signIn: "Create an account"; case .createAccount, .recovery: "Back to sign in" } }
+    var switchPrompt: String { switch self { case .signIn: "New to Taverley?"; case .createAccount: "Already have an account?"; case .recovery: "" } }
+    var switchTitle: String { switch self { case .signIn: "Create account"; case .createAccount: "Sign in"; case .recovery: "Back to sign in" } }
     var switchMode: Self { self == .signIn ? .createAccount : .signIn }
+}
+
+private struct TaverleyBrandLockup: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            TaverleyBrandMark()
+                .frame(width: 72, height: 99)
+                .accessibilityHidden(true)
+
+            Text("Taverley")
+                .font(.custom("Plus Jakarta Sans", size: 31).weight(.semibold))
+                .tracking(-0.9)
+                .foregroundStyle(AppTheme.textPrimary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Taverley")
+    }
+}
+
+private struct TaverleyBrandMark: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+
+            ZStack {
+                brandCircle(
+                    diameter: width * 204 / 424,
+                    colors: [Color(red: 162/255, green: 72/255, blue: 242/255), Color(red: 162/255, green: 71/255, blue: 237/255)],
+                    x: width * 102 / 424,
+                    y: height * 102 / 583
+                )
+                brandCircle(
+                    diameter: width * 204 / 424,
+                    colors: [Color(red: 200/255, green: 146/255, blue: 238/255), Color(red: 196/255, green: 138/255, blue: 233/255)],
+                    x: width * 322 / 424,
+                    y: height * 102 / 583
+                )
+                brandCircle(
+                    diameter: width * 196 / 424,
+                    colors: [Color(red: 200/255, green: 144/255, blue: 238/255), Color(red: 198/255, green: 138/255, blue: 237/255)],
+                    x: width * 105 / 424,
+                    y: height * 314 / 583
+                )
+                brandCircle(
+                    diameter: width * 196 / 424,
+                    colors: [Color(red: 162/255, green: 71/255, blue: 239/255), Color(red: 158/255, green: 69/255, blue: 236/255)],
+                    x: width * 320 / 424,
+                    y: height * 314 / 583
+                )
+                brandCircle(
+                    diameter: width * 188 / 424,
+                    colors: [Color(red: 182/255, green: 107/255, blue: 240/255), Color(red: 174/255, green: 96/255, blue: 237/255)],
+                    x: width * 211 / 424,
+                    y: height * 489 / 583
+                )
+            }
+        }
+    }
+
+    private func brandCircle(diameter: CGFloat, colors: [Color], x: CGFloat, y: CGFloat) -> some View {
+        Circle()
+            .fill(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+            .frame(width: diameter, height: diameter)
+            .position(x: x, y: y)
+    }
 }
 
 private enum UsernameAvailability { case idle, checking, available, taken, failed }
@@ -384,6 +511,21 @@ private struct AuthCodeVerificationView: View {
 }
 
 private extension View {
+    func authInputStyle() -> some View {
+        self
+            .font(.custom("Inter", size: 16))
+            .foregroundStyle(AppTheme.textPrimary)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .background(AppTheme.elevatedSurface)
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(AppTheme.separator, lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
     func authSecondaryButton() -> some View {
         font(.custom("Inter", size: 16).weight(.semibold)).foregroundStyle(AppTheme.primary).frame(maxWidth: .infinity).padding(.top, 10)
     }

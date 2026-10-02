@@ -1,0 +1,15 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="topLeft" x1="300" y1="248" x2="504" y2="451" gradientUnits="userSpaceOnUse"><stop stop-color="#A248F2"/><stop offset="1" stop-color="#A247ED"/></linearGradient>
+    <linearGradient id="topRight" x1="519" y1="248" x2="723" y2="451" gradientUnits="userSpaceOnUse"><stop stop-color="#C892EE"/><stop offset="1" stop-color="#C48AE9"/></linearGradient>
+    <linearGradient id="middleLeft" x1="305" y1="463" x2="504" y2="658" gradientUnits="userSpaceOnUse"><stop stop-color="#C890EE"/><stop offset="1" stop-color="#C68AED"/></linearGradient>
+    <linearGradient id="middleRight" x1="519" y1="463" x2="718" y2="658" gradientUnits="userSpaceOnUse"><stop stop-color="#A247EF"/><stop offset="1" stop-color="#9E45EC"/></linearGradient>
+    <linearGradient id="bottom" x1="417" y1="644" x2="605" y2="828" gradientUnits="userSpaceOnUse"><stop stop-color="#B66BF0"/><stop offset="1" stop-color="#AE60ED"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="white"/>
+  <circle cx="402" cy="349" r="102" fill="url(#topLeft)"/>
+  <circle cx="622" cy="349" r="102" fill="url(#topRight)"/>
+  <circle cx="405" cy="561" r="98" fill="url(#middleLeft)"/>
+  <circle cx="620" cy="561" r="98" fill="url(#middleRight)"/>
+  <circle cx="511" cy="736" r="94" fill="url(#bottom)"/>
+</svg>
