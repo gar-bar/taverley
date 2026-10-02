@@ -24,7 +24,8 @@ enum AppTheme {
     static let label = textSecondary
 
     enum Spacing { static let xxs: CGFloat = 4; static let xs: CGFloat = 8; static let sm: CGFloat = 12; static let md: CGFloat = 16; static let lg: CGFloat = 24 }
-    enum Radius { static let control: CGFloat = 12; static let card: CGFloat = 16 }
+    enum Radius { static let control: CGFloat = 12; static let card: CGFloat = 16; static let coverImage: CGFloat = 22 }
+    enum Layout { static let libraryCardHeight: CGFloat = 224; static let libraryCardContentHeight: CGFloat = 200 }
 
     static func display(_ style: Font.TextStyle = .title2) -> Font { .system(style, design: .rounded).weight(.bold) }
 }

@@ -744,7 +744,7 @@ private struct SettingsValueStyle: ViewModifier {
             .foregroundStyle(AppTheme.textSecondary)
             .padding(.horizontal, 14)
             .frame(minHeight: 32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity)
             .background(AppTheme.elevatedSurface)
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(AppTheme.separator, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1425,17 +1425,20 @@ struct RecipeCard: View {
     var body: some View {
         SurfaceCard {
             VStack(alignment: .leading, spacing: 8) {
-                RecipeThumbnail(recipe: recipe)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(4 / 3, contentMode: .fit)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                GeometryReader { proxy in
+                    RecipeThumbnail(recipe: recipe)
+                        .frame(width: proxy.size.width, height: proxy.size.width * 0.75)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
+                }
+                .aspectRatio(4 / 3, contentMode: .fit)
                 Text(recipe.title).font(.headline).foregroundStyle(AppTheme.text).lineLimit(1)
                 Text("@\(recipe.author)").font(.caption).foregroundStyle(AppTheme.label)
                 if !recipe.tags.isEmpty { TagPreview(tags: recipe.tags) }
             }
+            .frame(maxWidth: .infinity, minHeight: AppTheme.Layout.libraryCardContentHeight, maxHeight: AppTheme.Layout.libraryCardContentHeight, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: AppTheme.Layout.libraryCardHeight, maxHeight: AppTheme.Layout.libraryCardHeight, alignment: .top)
     }
 }
 
@@ -1445,7 +1448,14 @@ struct RecipeDetailView: View {
         ZStack(alignment: .top) {
             Group {
                 RecipeThumbnail(recipe: displayedRecipe)
-            }.frame(height: 180).clipped().overlay(AppTheme.background.opacity(0.28))
+            }
+            .frame(height: 180)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .overlay(AppTheme.background.opacity(0.28))
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.coverImage, style: .continuous))
+            .padding(.horizontal, AppTheme.Spacing.md)
+            .padding(.top, AppTheme.Spacing.xs)
         }
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: AppTheme.Spacing.xs) {
@@ -1519,7 +1529,7 @@ struct RecipeEditor: View {
     }
     var body: some View {
         NavigationStack {
-            ZStack {
+            ZStack(alignment: .bottom) {
                 AppTheme.background.ignoresSafeArea()
                 ScrollView {
                     VStack(spacing: 0) {
@@ -1530,17 +1540,20 @@ struct RecipeEditor: View {
                             .clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12))
                             .offset(y: -15)
                     }
+                    .padding(.bottom, 74)
                 }
                 .scrollIndicators(.hidden)
+                PrimaryButton(title: recipe == nil ? "Save Recipe" : "Save Changes") { saveRecipe() }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                    .background(AppTheme.background.opacity(0.96))
             }
         }
         .task(id: photoItem) {
             guard let photoItem else { return }
             imageData = try? await photoItem.loadTransferable(type: Data.self)
         }
-        .navigationTitle(recipe == nil ? "New Recipe" : "Edit Recipe")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     private var recipeCoverPicker: some View {
@@ -1549,7 +1562,7 @@ struct RecipeEditor: View {
                 ZStack(alignment: .bottomTrailing) {
                     Group {
                         if let imageData, let image = UIImage(data: imageData) { Image(uiImage: image).resizable().scaledToFill() }
-                        else { ZStack { AppTheme.elevatedSurface; Image(systemName: "fork.knife").font(.largeTitle).foregroundStyle(AppTheme.accent) } }
+                        else { Image("FigmaHero").resizable().scaledToFill().overlay(AppTheme.background.opacity(0.42)) }
                     }
                     .frame(height: 180)
                     .frame(maxWidth: .infinity)
@@ -1560,26 +1573,60 @@ struct RecipeEditor: View {
                         .background(AppTheme.input.opacity(0.96)).foregroundStyle(AppTheme.text)
                         .clipShape(Capsule()).padding(12)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.coverImage, style: .continuous))
             }
             .buttonStyle(.plain)
+            CircularBackButton(action: { dismiss() }).padding(14)
         }
+        .padding(.horizontal, AppTheme.Spacing.md)
+        .padding(.top, AppTheme.Spacing.xs)
     }
 
     private var recipeForm: some View {
         VStack(alignment: .leading, spacing: 13) {
-            HStack(spacing: AppTheme.Spacing.xs) {
-                InitialsAvatar(profile: authorProfile, size: 32)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(resolvedAuthor).font(.subheadline.weight(.semibold))
-                    Text("@\(resolvedAuthor)").font(.caption).foregroundStyle(AppTheme.label)
+            Text(recipe == nil ? "Create Recipe" : "Edit Recipe")
+                .font(.custom("Plus Jakarta Sans", size: 24).weight(.bold))
+                .foregroundStyle(AppTheme.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            SurfaceCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Recipe details")
+                        .font(.custom("Plus Jakarta Sans", size: 19).weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+                    HStack(spacing: AppTheme.Spacing.xs) {
+                        InitialsAvatar(profile: authorProfile, size: 32)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(resolvedAuthor).font(.subheadline.weight(.semibold))
+                            Text("@\(resolvedAuthor)").font(.caption).foregroundStyle(AppTheme.label)
+                        }
+                    }
+                    fieldLabel("Recipe name")
+                    TextField("Add title", text: $title).figmaInput().focused($focusedField, equals: .title).onChange(of: title) { retainFocus(.title) }
+                    fieldLabel("Description")
+                    TextField("Add description", text: $summary, axis: .vertical).lineLimit(3...5).figmaInput().focused($focusedField, equals: .summary).onChange(of: summary) { retainFocus(.summary) }
+                    HStack { Text("Serves \(servings)").foregroundStyle(AppTheme.label); Stepper("Servings", value: $servings, in: 1...30).labelsHidden() }
+                    RecipeTagEditor(
+                        tags: $tags,
+                        suggestions: RecipeTagPolicy.catalog(from: store.recipes),
+                        titleFont: .custom("Plus Jakarta Sans", size: 19).weight(.bold),
+                        usesSurfaceCard: false
+                    )
                 }
             }
-            TextField("Add Title", text: $title).figmaInput().focused($focusedField, equals: .title).onChange(of: title) { retainFocus(.title) }.padding(.bottom, 8)
-            TextField("Add Description", text: $summary, axis: .vertical).lineLimit(3...5).figmaInput().focused($focusedField, equals: .summary).onChange(of: summary) { retainFocus(.summary) }.padding(.bottom, 8)
-            HStack { Text("Serves \(servings)").foregroundStyle(AppTheme.label); Stepper("", value: $servings, in: 1...30).labelsHidden() }.padding(.bottom, 8)
-            RecipeTagEditor(tags: $tags, suggestions: RecipeTagPolicy.catalog(from: store.recipes))
-            HStack(spacing: 12) { Stepper("Prep \(prepMinutes) min", value: $prepMinutes, in: 0...480); Stepper("Cook \(cookMinutes) min", value: $cookMinutes, in: 0...480) }.font(.footnote)
+            HStack(spacing: AppTheme.Spacing.sm) {
+                VStack(alignment: .leading, spacing: AppTheme.Spacing.xxs) {
+                    fieldLabel("Prep time (minutes)")
+                    TextField("0", value: $prepMinutes, format: .number)
+                        .keyboardType(.numberPad)
+                        .figmaInput()
+                }
+                VStack(alignment: .leading, spacing: AppTheme.Spacing.xxs) {
+                    fieldLabel("Cook time (minutes)")
+                    TextField("0", value: $cookMinutes, format: .number)
+                        .keyboardType(.numberPad)
+                        .figmaInput()
+                }
+            }
             SurfaceCard {
                 VStack(alignment: .leading, spacing: 9) {
                     Text("Ingredients").font(.title3.weight(.semibold))
@@ -1591,7 +1638,6 @@ struct RecipeEditor: View {
             SurfaceCard { VStack(alignment: .leading, spacing: 9) { Text("Instructions").font(.title3.weight(.semibold)); ForEach(Array($steps.enumerated()), id: \.element.id) { index, $step in HStack(alignment: .top) { Text("\(index + 1)").font(.caption.weight(.bold)).frame(width: 22, height: 22).background(AppTheme.input).clipShape(Circle()); TextField("Add instruction", text: $step.text, axis: .vertical).lineLimit(2...4).figmaInput(); Button(role: .destructive) { steps.remove(at: index) } label: { Image(systemName: "trash") }.disabled(steps.count == 1) } }; Button("Add Step", systemImage: "plus") { steps.append(RecipeStep(text: "")) }.buttonStyle(.bordered).tint(AppTheme.primary) } }
             NutritionFactsEditorCard(nutrition: $nutrition)
             if let validationMessage { InlineErrorBanner(message: validationMessage, retry: nil) }
-            PrimaryButton(title: recipe == nil ? "Save Recipe" : "Save Changes") { saveRecipe() }
         }
     }
 
@@ -1615,6 +1661,7 @@ struct RecipeEditor: View {
         return UserProfile(id: UUID(), displayName: resolvedAuthor, username: resolvedAuthor)
     }
     private func retainFocus(_ field: RecipeEditorField) { DispatchQueue.main.async { focusedField = field } }
+    private func fieldLabel(_ title: String) -> some View { Text(title).font(.custom("Inter", size: 12).weight(.semibold)).foregroundStyle(AppTheme.label) }
     private enum RecipeEditorField { case title, summary }
 }
 
@@ -1738,7 +1785,7 @@ struct MealPlanListView: View {
                         } else {
                             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                                 ForEach(filteredPlans) { plan in
-                                    NavigationLink { MealPlanEditor(plan: plan) } label: { PlanCard(plan: plan) }
+                                    NavigationLink { MealPlanDetailView(plan: plan) } label: { PlanCard(plan: plan) }
                                         .buttonStyle(.plain)
                                 }
                             }
@@ -1770,13 +1817,20 @@ struct PlanCard: View {
     var body: some View {
         SurfaceCard {
             VStack(alignment: .leading, spacing: 8) {
-                Group { if let data = plan.imageData, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() } else { ZStack { LinearGradient(colors: [AppTheme.elevatedSurface, AppTheme.input], startPoint: .topLeading, endPoint: .bottomTrailing); Image(systemName: "calendar.badge.clock").font(.title2).foregroundStyle(AppTheme.accent) } } }
-                    .frame(maxWidth: .infinity).aspectRatio(4 / 3, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                GeometryReader { proxy in
+                    Group { if let data = plan.imageData, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() } else { ZStack { LinearGradient(colors: [AppTheme.elevatedSurface, AppTheme.input], startPoint: .topLeading, endPoint: .bottomTrailing); Image(systemName: "calendar.badge.clock").font(.title2).foregroundStyle(AppTheme.accent) } } }
+                        .frame(width: proxy.size.width, height: proxy.size.width * 0.75)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous))
+                }
+                .aspectRatio(4 / 3, contentMode: .fit)
                 Text(plan.name).font(.headline).foregroundStyle(AppTheme.text).lineLimit(1)
                 Text("\(plan.weekCount) weeks · \(plan.meals.count) meals").font(.caption).foregroundStyle(AppTheme.label)
+                if !plan.tags.isEmpty { TagPreview(tags: plan.tags) }
             }
+            .frame(maxWidth: .infinity, minHeight: AppTheme.Layout.libraryCardContentHeight, maxHeight: AppTheme.Layout.libraryCardContentHeight, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: AppTheme.Layout.libraryCardHeight, maxHeight: AppTheme.Layout.libraryCardHeight, alignment: .top)
     }
 }
 
@@ -1785,11 +1839,165 @@ struct PlanRecipeSlot: Identifiable {
     var id: String { "\(week)-\(weekday)-\(mealType.rawValue)" }
 }
 
+/// A saved plan is intentionally read-only until the owner explicitly chooses Edit.
+/// This mirrors recipes and keeps accidental schedule changes out of browsing.
+struct MealPlanDetailView: View {
+    @EnvironmentObject private var store: MealStore
+    @EnvironmentObject private var householdStore: HouseholdStore
+    let plan: MealPlan
+    @State private var showEdit = false
+    @State private var confirmHouseholdShare = false
+    @State private var shareMessage: String?
+    @State private var expandedWeeks: Set<Int> = [1]
+
+    private var displayedPlan: MealPlan { store.plans.first { $0.id == plan.id } ?? plan }
+
+    var body: some View {
+        ZStack {
+            AppTheme.background.ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 0) {
+                    planImage
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(displayedPlan.name)
+                            .font(AppTheme.display(.title))
+                            .foregroundStyle(AppTheme.text)
+                        Text("\(displayedPlan.weekCount) week\(displayedPlan.weekCount == 1 ? "" : "s") · \(displayedPlan.meals.count) meal\(displayedPlan.meals.count == 1 ? "" : "s")")
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.label)
+                        if !displayedPlan.tags.isEmpty {
+                            TagFlowLayout { ForEach(displayedPlan.tags, id: \.self) { Tag(title: $0) } }
+                        }
+                        Text("Plan schedule")
+                            .font(.custom("Plus Jakarta Sans", size: 21).weight(.bold))
+                            .foregroundStyle(AppTheme.text)
+                        ForEach(1...displayedPlan.weekCount, id: \.self) { week in weekCard(week) }
+                    }
+                    .padding(16)
+                    .padding(.bottom, 28)
+                    .background(AppTheme.background)
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12))
+                    .offset(y: -15)
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+        .navigationTitle(displayedPlan.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(AppTheme.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Share with Household", systemImage: "house.fill") { sharePlan() }
+                    Button("Edit Meal Plan", systemImage: "pencil") { showEdit = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel("Meal plan options")
+            }
+        }
+        .sheet(isPresented: $showEdit) {
+            if let currentPlan = store.plans.first(where: { $0.id == plan.id }) {
+                MealPlanEditor(plan: currentPlan)
+            }
+        }
+        .confirmationDialog("Share this plan with your household?", isPresented: $confirmHouseholdShare) {
+            Button("Share plan and \(Set(displayedPlan.meals.map(\.recipeID)).count) recipe\(Set(displayedPlan.meals.map(\.recipeID)).count == 1 ? "" : "s")") { shareDisplayedPlan() }
+        } message: {
+            Text("This creates collaborative household copies. Your personal plan and recipes stay private and unchanged.")
+        }
+        .alert("Household", isPresented: Binding(get: { shareMessage != nil }, set: { if !$0 { shareMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(shareMessage ?? "")
+        }
+    }
+
+    private var planImage: some View {
+        Group {
+            if let data = displayedPlan.imageData, let image = UIImage(data: data) {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Image("FigmaHero").resizable().scaledToFill().overlay(AppTheme.background.opacity(0.42))
+            }
+        }
+        .frame(height: 180)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.coverImage, style: .continuous))
+        .padding(.horizontal, AppTheme.Spacing.md)
+        .padding(.top, AppTheme.Spacing.xs)
+    }
+
+    private func weekCard(_ week: Int) -> some View {
+        let meals = displayedPlan.meals.filter { $0.week == week }
+        let isExpanded = expandedWeeks.contains(week)
+        return SurfaceCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        if isExpanded { expandedWeeks.remove(week) } else { expandedWeeks.insert(week) }
+                    }
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Week \(week)").font(.custom("Plus Jakarta Sans", size: 18).weight(.bold))
+                            Text("\(meals.count) meal\(meals.count == 1 ? "" : "s")").font(.custom("Inter", size: 12)).foregroundStyle(AppTheme.label)
+                        }
+                        Spacer()
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down").foregroundStyle(AppTheme.label)
+                    }
+                    .foregroundStyle(AppTheme.text)
+                }
+                .buttonStyle(.plain)
+                if isExpanded {
+                    ForEach(1...7, id: \.self) { weekday in
+                        let dayMeals = meals.filter { $0.weekday == weekday }
+                        if !dayMeals.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(weekdayName(weekday)).font(.custom("Inter", size: 12).weight(.bold)).foregroundStyle(AppTheme.label)
+                                ForEach(dayMeals) { meal in
+                                    HStack(spacing: 8) {
+                                        Text(meal.mealType.displayName).font(.custom("Inter", size: 12).weight(.semibold)).frame(width: 72, alignment: .leading)
+                                        Text(store.recipe(meal.recipeID)?.title ?? "Missing recipe").font(.custom("Inter", size: 13)).lineLimit(1)
+                                    }
+                                    .foregroundStyle(AppTheme.text)
+                                }
+                            }
+                            .padding(.top, 2)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func sharePlan() {
+        guard householdStore.household != nil else {
+            shareMessage = "Create or join a household before sharing meal plans."
+            return
+        }
+        confirmHouseholdShare = true
+    }
+
+    private func shareDisplayedPlan() {
+        Task {
+            do {
+                try await householdStore.share(plan: displayedPlan)
+                shareMessage = "Meal plan shared with \(householdStore.household?.name ?? "your household")."
+            } catch {
+                shareMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
 struct MealPlanEditor: View {
-    @EnvironmentObject private var store: MealStore; @EnvironmentObject private var householdStore: HouseholdStore; @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: MealStore; @Environment(\.dismiss) private var dismiss
     let existing: MealPlan?
     @State private var name = ""; @State private var tags: [String] = []; @State private var weekCount = 1; @State private var meals: [PlanMeal] = []; @State private var expandedWeek = 1
-    @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?; @State private var recipeSlot: PlanRecipeSlot?; @State private var confirmHouseholdShare = false; @State private var shareMessage: String?
+    @State private var photoItem: PhotosPickerItem?; @State private var imageData: Data?; @State private var recipeSlot: PlanRecipeSlot?
     @FocusState private var focusedField: MealPlanEditorField?
     init(plan: MealPlan?) { existing = plan; _name = State(initialValue: plan?.name ?? ""); _tags = State(initialValue: RecipeTagPolicy.normalized(plan?.tags ?? [])); _weekCount = State(initialValue: plan?.weekCount ?? 1); _meals = State(initialValue: plan?.meals ?? []); _imageData = State(initialValue: plan?.imageData) }
     var body: some View {
@@ -1797,14 +2005,21 @@ struct MealPlanEditor: View {
             ZStack(alignment: .bottom) {
                 AppTheme.background.ignoresSafeArea()
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(spacing: 0) {
                         planHero
-                        editorHeader
-                        planDetails
-                        Text("Plan schedule").font(.custom("Plus Jakarta Sans", size: 21).weight(.bold)).foregroundStyle(AppTheme.text)
-                        ForEach(1...weekCount, id: \.self) { week in weekBlock(week) }
-                        Button { weekCount += 1; expandedWeek = weekCount } label: { Label("Add Week", systemImage: "plus").font(.custom("Inter", size: 14).weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 12).background(AppTheme.input).foregroundStyle(AppTheme.primary).clipShape(RoundedRectangle(cornerRadius: 12)) }.buttonStyle(.plain)
-                    }.padding(16).padding(.bottom, 90)
+                        VStack(alignment: .leading, spacing: 14) {
+                            editorHeader
+                            planDetails
+                            Text("Plan schedule").font(.custom("Plus Jakarta Sans", size: 21).weight(.bold)).foregroundStyle(AppTheme.text)
+                            ForEach(1...weekCount, id: \.self) { week in weekBlock(week) }
+                            Button { weekCount += 1; expandedWeek = weekCount } label: { Label("Add Week", systemImage: "plus").font(.custom("Inter", size: 14).weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 12).background(AppTheme.input).foregroundStyle(AppTheme.primary).clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.control, style: .continuous)) }.buttonStyle(.plain)
+                        }
+                        .padding(AppTheme.Spacing.md)
+                        .padding(.bottom, 90)
+                        .background(AppTheme.background)
+                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: AppTheme.Radius.control, topTrailingRadius: AppTheme.Radius.control))
+                        .offset(y: -15)
+                    }
                 }.scrollIndicators(.hidden)
                 PrimaryButton(title: existing == nil ? "Create Meal Plan" : "Save Changes") { savePlan() }
                     .padding(.horizontal, 16).padding(.bottom, 16).background(AppTheme.background.opacity(0.96))
@@ -1820,10 +2035,6 @@ struct MealPlanEditor: View {
             guard let photoItem else { return }
             imageData = try? await photoItem.loadTransferable(type: Data.self)
         }
-        .confirmationDialog("Share this plan with your household?", isPresented: $confirmHouseholdShare) {
-            Button("Share plan and \(Set(meals.map(\.recipeID)).count) recipe\(Set(meals.map(\.recipeID)).count == 1 ? "" : "s")") { sharePlan() }
-        } message: { Text("This creates collaborative household copies. Your personal plan and recipes stay private and unchanged.") }
-        .alert("Household", isPresented: Binding(get: { shareMessage != nil }, set: { if !$0 { shareMessage = nil } })) { Button("OK", role: .cancel) {} } message: { Text(shareMessage ?? "") }
         .toolbar(.hidden, for: .navigationBar)
     }
 
@@ -1836,29 +2047,12 @@ struct MealPlanEditor: View {
                         else { Image("FigmaHero").resizable().scaledToFill().overlay(AppTheme.background.opacity(0.42)) }
                     }.frame(height: 180).frame(maxWidth: .infinity).clipped()
                     Label(imageData == nil ? "Add cover image" : "Change image", systemImage: "photo").font(.custom("Inter", size: 12).weight(.semibold)).padding(.horizontal, 12).padding(.vertical, 8).background(AppTheme.input.opacity(0.96)).foregroundStyle(AppTheme.text).clipShape(Capsule()).padding(12)
-                }.clipShape(RoundedRectangle(cornerRadius: 14))
+                }.clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.coverImage, style: .continuous))
             }.buttonStyle(.plain)
             CircularBackButton(action: { dismiss() }).padding(14)
-            if existing != nil {
-                HStack {
-                    Spacer()
-                    Button {
-                        if householdStore.household == nil { shareMessage = "Create or join a household before sharing meal plans." }
-                        else { confirmHouseholdShare = true }
-                    } label: {
-                        Label("Share", systemImage: "house.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppTheme.accent)
-                            .padding(.horizontal, 12)
-                            .frame(height: 40)
-                            .background(AppTheme.background.opacity(0.94))
-                            .clipShape(Capsule())
-                    }
-                    .accessibilityLabel("Share meal plan with household")
-                }
-                .padding(14)
-            }
         }
+        .padding(.horizontal, AppTheme.Spacing.md)
+        .padding(.top, AppTheme.Spacing.xs)
     }
 
     private var editorHeader: some View {
@@ -1921,7 +2115,6 @@ struct MealPlanEditor: View {
     private enum MealPlanEditorField { case name }
     private func setRecipe(_ recipeID: UUID, for slot: PlanRecipeSlot) { meals.removeAll { $0.week == slot.week && $0.weekday == slot.weekday && $0.mealType == slot.mealType }; meals.append(PlanMeal(week: slot.week, weekday: slot.weekday, mealType: slot.mealType, recipeID: recipeID)) }
     private func savePlan() { guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; store.save(plan: MealPlan(id: existing?.id ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), tags: RecipeTagPolicy.normalized(tags), weekCount: weekCount, meals: meals.filter { $0.week <= weekCount }, imageData: imageData)); dismiss() }
-    private func sharePlan() { guard let existing else { return }; Task { do { try await householdStore.share(plan: existing); shareMessage = "Meal plan shared with \(householdStore.household?.name ?? "your household")." } catch { shareMessage = error.localizedDescription } } }
 }
 
 private struct PlanRecipePickerSheet: View {
